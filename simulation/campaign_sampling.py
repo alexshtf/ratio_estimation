@@ -1,6 +1,6 @@
 import numpy as np
 from .trends import global_trend, periodic_trend
-from .sampling import sample_numerators, sample_denominators
+from .sampling import sample_nb_with_dispersion, sample_poisson
 
 def pos(x):
     return np.logaddexp(0, x)
@@ -16,8 +16,8 @@ def sample_campaign(max_offset=24 * 60, mean_length=24 * 14, spend_resolution=25
     count_trend = count_shift + combined_trend(hours)
     spend_trend = spend_scale * combined_trend(hours) ** 2
 
-    hourly_spend = sample_numerators(spend_trend)
-    hourly_count = sample_denominators(spend_resolution * count_trend) / spend_resolution
+    hourly_spend = sample_nb_with_dispersion(spend_resolution * spend_trend) / spend_resolution
+    hourly_count = sample_poisson(count_trend)
     true_trend = spend_trend / count_trend
 
     return hours, true_trend, hourly_spend, hourly_count
