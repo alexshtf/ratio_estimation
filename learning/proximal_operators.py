@@ -1,8 +1,7 @@
 import numpy as np
-import scipy.special
 from numpy.typing import ArrayLike
 from typing import Union, Callable
-from scipy.special import wrightomega
+from scipy.special import wrightomega, expit
 
 
 def prox_regularized_perturbed(
@@ -31,8 +30,11 @@ def prox_regularized_perturbed(
         alpha = np.asarray(alpha)[..., np.newaxis]
 
 
-    inner_prox_arg = (x - eta * phi) / (1 + eta * alpha)
     inner_step_size = eta / (1 + eta * alpha)
+    if not np.isscalar(inner_step_size):
+        inner_step_size = np.squeeze(inner_step_size, axis=-1)
+
+    inner_prox_arg = (x - eta * phi) / (1 + eta * alpha)
     return inner_prox(inner_prox_arg, inner_step_size)
 
 
@@ -58,13 +60,13 @@ def prox_linear_composed(
     x = np.asarray(x)
     theta = np.asarray(theta)
     if not np.isscalar(b):
-        b = np.asarray(b)[..., np.newaxis]
+        b = np.asarray(b)
 
     nrm_squared = np.sum(np.square(theta), axis=-1)
     linear_term = np.sum(theta * x, axis=-1) + b
     inner_prox_eta = eta * nrm_squared
 
-    return x + theta * (inner_prox(linear_term, inner_prox_eta) - linear_term)[..., np.newaxis]
+    return x + theta * ((inner_prox(linear_term, inner_prox_eta) - linear_term) / nrm_squared)[..., np.newaxis]
 
 
 def exponential_prox(x: ArrayLike, eta: ArrayLike | float):
@@ -77,6 +79,46 @@ def exponential_prox(x: ArrayLike, eta: ArrayLike | float):
     """
     return x - wrightomega(x + np.log(eta))
 
+
+def polylog_exp_prox(x: ArrayLike, eta: ArrayLike | float):
+    r"""
+    Computes the proximal operator of :math:`f(z) = -\operatorname{Li}_2(-\exp(z))`. This
+    is exactly the integral of :math:`f'(x)=\ln(1+\exp(x))`.
+
+    The resulting proximal operator satisfies the equation:
+    ..math::
+        x^* + \eta \ln(1 + \exp(x^*)) = x
+
+    :param x: The point(s) at which to compute the proximal operator.
+    :param eta: The step-size(s) to use when computing the proximal operator. Must be positive.
+    :return: The computed :math:`\operatorname{prox}_{\eta f}(x)`
+    """
+    t = x
+    for _ in range(12): # 12 Newton iterations - seems to be enough
+        x = x - (x + eta * np.logaddexp(0, x) - t) / (1 + eta * expit(x))
+    return x
+
+
+def square_pos_prox(x:ArrayLike, eta: ArrayLike | float):
+    r"""
+    Computes the proximal operator of :math:`f(z) = z^2 / 2` with :math:`\operatorname{dom}(f) = \mathbb{R}^+`.
+
+    :param x: The point(s) at which to compute the proximal operator.
+    :param eta: The step-size(s) to use when computing the proximal operator.
+    :return: The computed :math:`\operatorname{prox}_{\eta f}(x)`
+    """
+    return np.maximum(0, x / (eta + 1))
+
+
+def square_prox(x: ArrayLike, eta: ArrayLike | float):
+    r"""
+    Computes the proximal operator of :math:`f(z) = z^2 / 2`
+
+    :param x: The point(s) at which to compute the proximal operator.
+    :param eta: The step-size(s) to use when computing the proximal operator.
+    :return: The computed :math:`\operatorname{prox}_{\eta f}(x)`
+    """
+    return x / (1 + eta)
 
 
 def compose_linear_perturb_reg(scalar_prox: Callable[[ArrayLike, ArrayLike | float], ArrayLike]):
@@ -93,46 +135,3 @@ def compose_linear_perturb_reg(scalar_prox: Callable[[ArrayLike, ArrayLike | flo
         return prox_regularized_perturbed(x, eta, linear_only_prox, phi, alpha)
 
     return prox_op
-
-def exponential_linear_orig(x: ArrayLike,
-                       eta: Union[ArrayLike, float],
-                       theta: ArrayLike,
-                       phi: ArrayLike,
-                       b: Union[ArrayLike, float],
-                       alpha: Union[ArrayLike, float]):
-    r"""
-    Proximal operator of regularized exponenial-linear losses.
-    .. math::
-        f(x; \theta, \phi, b, \alpha) = \exp(\langle \theta, x \rangle + b) + \langle \phi, x \rangle + \frac{\apha}{2} \|x\|_2^2
-
-    with step-size :math:\eta:math:.
-    :param x: The point at which to evaluate the proximal operator
-    :param eta: The step-size
-    :param theta: The linear coefficients inside the exponential function
-    :param phi: The linear coefficients outside the exponential function
-    :param b: The bias inside the exponential function
-    :param alpha: The regularization strength
-    :return: The proximal operator of :math:f(x):math: defined above.
-    """
-    x = np.asarray(x)
-    theta = np.asarray(theta)
-    phi = np.asarray(phi)
-
-    # broadcast input arguments expected to have one-less dimension than w, theta, and phi if they are not scalars
-    if not np.isscalar(eta):
-        eta = np.asarray(eta)[..., np.newaxis]
-    if not np.isscalar(b):
-        b = np.asarray(b)[..., np.newaxis]
-    if not np.isscalar(alpha):
-        alpha = np.asarray(alpha)[..., np.newaxis]
-
-    # compute formula parts
-    common_denom = (1 + eta * alpha)
-    gamma = eta * np.sum(np.square(theta), axis=-1, keepdims=True) / common_denom
-    delta = np.sum(theta * (x - eta * phi), axis=-1, keepdims=True) / common_denom + b
-
-    # solve q'(s) = 0
-    s = wrightomega(delta + np.log(gamma)) / gamma
-
-    # compute the result
-    return (x - eta * s * theta - eta * phi) / common_denom
