@@ -1,1 +1,1 @@
-from .proximal_operators import *
+from .learners import RatioProximalLearner, ExponentialPredictor, SquarePosPredictor, PolylogExpPredictor
