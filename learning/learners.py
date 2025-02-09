@@ -58,7 +58,7 @@ class SquarePosPredictor:
         return square_pos_prox(z, eta)
 
     def deriv(self, z):
-        return z
+        return np.maximum(0, z)
 
 
 class PolylogExpPredictor:
