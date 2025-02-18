@@ -6,3 +6,10 @@ from .learners import (
     LinRegRatioLearner,
     LinRegInvRatioLearner
 )
+
+from .autoreg import (
+    Window,
+    NormalizedAutoregRatios,
+    BiasFeature,
+    ConcatFeatures
+)

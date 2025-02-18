@@ -35,8 +35,7 @@ class RatioProximalLearner:
         :param y_num: The numerator of the target ratio
         :param y_denom: The denominator of the target ratio
         """
-        if not hasattr(self, 'w') or self.w is None:
-            self.w = np.zeros_like(x)
+        self._ensure_weights(x)
         def inner_prox(z, eta):
             return prox_linear_composed(z, eta * y_denom, self._pred_func.prox, x, 0)
         self.w = prox_regularized_perturbed(self.w, self._step_size, inner_prox, -y_num * x, self._reg_coef)
@@ -47,7 +46,12 @@ class RatioProximalLearner:
         :param x: The feature vector
         :return: The predicted ratio
         """
+        self._ensure_weights(x)
         return self._pred_func.deriv(np.dot(self.w, x))
+
+    def _ensure_weights(self, x):
+        if not hasattr(self, 'w') or self.w is None:
+            self.w = np.zeros_like(x)
 
 
 
@@ -103,9 +107,7 @@ class LinRegRatioLearner:
         :param y_num: The numerator of the target ratio
         :param y_denom: The denominator of the target ratio
         """
-        if not hasattr(self, 'w') or self.w is None:
-            self.w = np.zeros_like(x)
-
+        self._ensure_weights(x)
         def inner_prox(z, eta):
             return prox_linear_composed(z, eta, square_prox, y_denom * x, 0)
         self.w = prox_regularized_perturbed(self.w, self._step_size, inner_prox, -y_num * y_denom * x, self._reg_coef)
@@ -116,7 +118,12 @@ class LinRegRatioLearner:
         :param x: The feature vector
         :return: The predicted ratio
         """
+        self._ensure_weights(x)
         return np.dot(self.w, x)
+
+    def _ensure_weights(self, x):
+        if not hasattr(self, 'w') or self.w is None:
+            self.w = np.zeros_like(x)
 
 
 class LinRegInvRatioLearner:
@@ -138,9 +145,7 @@ class LinRegInvRatioLearner:
         :param y_num: The numerator of the target ratio
         :param y_denom: The denominator of the target ratio
         """
-        if not hasattr(self, 'w') or self.w is None:
-            self.w = np.zeros_like(x)
-
+        self._ensure_weights(x)
         def inner_prox(z, eta):
             return prox_linear_composed(z, eta, square_prox, y_num * x, 0)
         self.w = prox_regularized_perturbed(self.w, self._step_size, inner_prox, -y_num * y_denom * x, self._reg_coef)
@@ -151,4 +156,9 @@ class LinRegInvRatioLearner:
         :param x: The feature vector
         :return: The predicted ratio
         """
+        self._ensure_weights(x)
         return np.reciprocal(np.dot(self.w, x))
+
+    def _ensure_weights(self, x):
+        if not hasattr(self, 'w') or self.w is None:
+            self.w = np.zeros_like(x)
