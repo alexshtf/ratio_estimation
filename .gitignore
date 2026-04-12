@@ -2,3 +2,10 @@
 .venv
 __pycache__
 *.log
+.ipynb_checkpoints
+.pyright
+.pytest_cache
+.ruff_cache
+artifacts/*
+!artifacts/legacy_study_logs/
+!artifacts/legacy_study_logs/*.log
