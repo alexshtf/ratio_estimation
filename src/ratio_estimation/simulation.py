@@ -30,7 +30,7 @@ def periodic_trend(
     max_periods: int = 2,
     rng: np.random.Generator | None = None,
 ) -> FloatArray:
-    """Sample a random daily periodic trend with archived notebook semantics."""
+    """Sample a random daily periodic trend with the maintained benchmark semantics."""
     generator = np.random.default_rng() if rng is None else rng
     hour_array = np.asarray(hours, dtype=float)
     angles = (2.0 * np.pi * hour_array / 24.0)[None, :]
@@ -82,7 +82,7 @@ def sample_negative_binomial(
     dispersion: float = 0.75,
     rng: np.random.Generator | None = None,
 ) -> NDArray[np.int64]:
-    """Sample overdispersed counts with the archived quadratic-variance law."""
+    """Sample overdispersed counts with the maintained quadratic-variance law."""
     generator = np.random.default_rng() if rng is None else rng
     mean_array = np.asarray(mean, dtype=float)
     variance = 1.0 + dispersion * np.square(mean_array)

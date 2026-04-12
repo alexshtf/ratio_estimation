@@ -8,7 +8,7 @@ Research code for online ratio estimation on synthetic campaign time series.
 - `experiments`: reusable research helpers, baselines, evaluation loops, and Optuna tuning
 - `notebooks`: thin demos that import the library and experiment helpers
 - `docs`: short human-readable notes, including the algorithm summary
-- `artifacts`: generated outputs and archived historical experiment logs
+- `artifacts`: generated outputs and legacy study logs
 
 ## Setup
 
@@ -52,13 +52,13 @@ for spend, count in zip(campaign.spend, campaign.count, strict=True):
 uv run python -m experiments.tune
 ```
 
-The canonical archived benchmark workflow is:
+The canonical benchmark workflow is:
 
 ```bash
 uv run python -m experiments.benchmark
 ```
 
-The cheap single-stream sanity-check workflow from the archived notebook is:
+The cheap single-stream sanity-check workflow is:
 
 ```bash
 uv run python -m experiments.single_stream --models quadratic
@@ -79,7 +79,7 @@ make stream MODELS=quadratic TRIALS=50 HISTORY=5 SEED=0 TAIL_FRACTION=0.9
 
 `make stream` tunes one or more models on a single synthetic stream, writes the stream,
 per-model traces, final states, and summary files under `artifacts/single_stream/...`, and
-uses the archived tail-loss objective from the notebook.
+uses the maintained tail-loss sanity objective.
 
 The maintained notebooks are demos. Reusable models, evaluation logic, and tuning code belong in
 Python modules, not in notebook cells.

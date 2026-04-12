@@ -10,7 +10,7 @@ This repo is a research codebase for online ratio estimation on synthetic campai
 - `experiments`: reusable research flows, baselines, evaluation, tuning
 - `notebooks`: thin demos only
 - `docs`: short project documentation
-- `artifacts`: generated outputs and archived historical logs
+- `artifacts`: generated outputs and legacy study logs
 
 ## Style
 
@@ -27,4 +27,4 @@ This repo is a research codebase for online ratio estimation on synthetic campai
 - Keep `ruff`, `pyright`, and `pytest` green.
 - Update `README.md` and `docs/algorithms.md` when public APIs or algorithm descriptions change.
 - Extend `experiments/` instead of growing notebook-local code.
-- Treat `experiments.benchmark` and `make benchmark` as the canonical archived research workflow.
+- Treat `experiments.benchmark` and `make benchmark` as the canonical research workflow.

@@ -108,7 +108,7 @@ def generate_dataset(
     rng: np.random.Generator | None = None,
     **group_kwargs: Any,
 ) -> pd.DataFrame:
-    """Generate a multi-group panel with archived notebook feature semantics."""
+    """Generate a multi-group panel with the maintained benchmark feature semantics."""
     generator = np.random.default_rng() if rng is None else rng
     frames = [
         add_autoregressive_features(

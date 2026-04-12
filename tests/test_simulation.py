@@ -22,7 +22,7 @@ def test_negative_binomial_samples_are_nonnegative() -> None:
     assert np.all(samples >= 0)
 
 
-def test_negative_binomial_uses_archived_variance_law() -> None:
+def test_negative_binomial_uses_benchmark_variance_law() -> None:
     mean = 3.0
     dispersion = 0.75
     draws = sample_negative_binomial(
@@ -34,7 +34,7 @@ def test_negative_binomial_uses_archived_variance_law() -> None:
     assert abs(np.var(draws) - expected_variance) < 0.2
 
 
-def test_periodic_trend_matches_archived_single_harmonic_default() -> None:
+def test_periodic_trend_matches_benchmark_single_harmonic_default() -> None:
     hours = np.arange(6)
     observed = periodic_trend(hours, max_periods=2, rng=np.random.default_rng(0))
 

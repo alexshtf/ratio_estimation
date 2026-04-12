@@ -1,4 +1,4 @@
-"""Archived benchmark workflow for same-distribution and shifted-distribution tables."""
+"""Benchmark workflow for same-distribution and shifted-distribution tables."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from .evaluate import StreamingModel, make_json_safe, run_panel
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkModelSpec:
-    """One tuned model family in the archived benchmark suite."""
+    """One tuned model family in the maintained benchmark suite."""
 
     name: str
     input_column: str
@@ -52,7 +52,7 @@ def default_output_dir() -> Path:
 
 
 def build_benchmark_specs(history_length: int) -> list[BenchmarkModelSpec]:
-    """Build the archived benchmark model suite."""
+    """Build the maintained benchmark model suite."""
     return [
         BenchmarkModelSpec(
             name="exponential",
@@ -257,7 +257,7 @@ def run_benchmark(
     train_max_time_offset: int = 24 * 9,
     test_max_time_offset: int = 24 * 20,
 ) -> BenchmarkResult:
-    """Tune the archived benchmark suite and evaluate same and shifted tables."""
+    """Tune the benchmark suite and evaluate same and shifted tables."""
     output_path = Path(output_dir) if output_dir is not None else default_output_dir()
     master_rng = np.random.default_rng(seed)
     tune_seed = int(master_rng.integers(0, np.iinfo(np.uint32).max))
@@ -371,9 +371,9 @@ def format_summary_table(summary: pd.DataFrame) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments for the archived benchmark runner."""
+    """Parse command-line arguments for the benchmark runner."""
     parser = argparse.ArgumentParser(
-        description="Tune and evaluate the archived same-vs-shifted benchmark suite."
+        description="Tune and evaluate the maintained same-vs-shifted benchmark suite."
     )
     parser.add_argument("--trials", type=int, default=100, help="Optuna trials per model.")
     parser.add_argument("--history", type=int, default=4, help="Rolling feature window size.")
@@ -419,7 +419,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Run the archived benchmark CLI."""
+    """Run the benchmark CLI."""
     args = parse_args()
     result = run_benchmark(
         n_trials=args.trials,

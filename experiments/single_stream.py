@@ -41,7 +41,7 @@ def generate_single_stream(
     rng: np.random.Generator | None = None,
     **stream_kwargs: Any,
 ) -> pd.DataFrame:
-    """Generate one archived-style stream with rolling ratio-share features."""
+    """Generate one benchmark-style stream with rolling ratio-share features."""
     generator = np.random.default_rng() if rng is None else rng
     frame = sample_ad_group(group_id=0, rng=generator, **stream_kwargs)
     return add_autoregressive_features(frame, history_length=history_length)
@@ -88,7 +88,7 @@ def evaluate_single_stream(
     params: dict[str, Any],
     tail_fraction: float = 0.9,
 ) -> tuple[float, StreamDiagnostics]:
-    """Evaluate one tuned model on one stream with the archived tail-loss objective."""
+    """Evaluate one tuned model on one stream with the maintained tail-loss objective."""
     diagnostics = diagnose_stream(
         frame,
         spec.build_model(params),
@@ -105,7 +105,7 @@ def tune_single_stream(
     seed: int = 0,
     tail_fraction: float = 0.9,
 ) -> optuna.Study:
-    """Tune one model family on one stream using the archived tail-loss objective."""
+    """Tune one model family on one stream using the maintained tail-loss objective."""
     sampler = optuna.samplers.TPESampler(seed=seed)
     study = optuna.create_study(direction="minimize", sampler=sampler)
 
@@ -163,7 +163,7 @@ def run_single_stream_experiment(
     output_dir: str | Path | None = None,
     **stream_kwargs: Any,
 ) -> SingleStreamResult:
-    """Tune and evaluate one or more models on a single archived-style stream."""
+    """Tune and evaluate one or more models on a single benchmark-style stream."""
     output_path = Path(output_dir) if output_dir is not None else default_output_dir()
     master_rng = np.random.default_rng(seed)
     stream_seed = int(master_rng.integers(0, np.iinfo(np.uint32).max))
@@ -260,7 +260,7 @@ def format_summary_table(summary: pd.DataFrame) -> str:
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the single-stream runner."""
     parser = argparse.ArgumentParser(
-        description="Run the archived single-stream sanity-check workflow."
+        description="Run the maintained single-stream sanity-check workflow."
     )
     parser.add_argument(
         "--models",
@@ -280,7 +280,7 @@ def parse_args() -> argparse.Namespace:
         "--tail-fraction",
         type=float,
         default=0.9,
-        help="Fraction of the stream used for the archived tail-loss objective.",
+        help="Fraction of the stream used for the single-stream tail-loss objective.",
     )
     parser.add_argument("--output-dir", type=Path, default=None, help="Artifact directory.")
     parser.add_argument("--mean-spend", type=float, default=100.0, help="Mean spend scale.")

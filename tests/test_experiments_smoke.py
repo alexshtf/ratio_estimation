@@ -29,7 +29,7 @@ def test_rollout_stream_returns_prediction_frame() -> None:
     assert {"prediction", "actual_ratio", "true_ratio", "log_error"} <= set(rollout.columns)
 
 
-def test_generate_dataset_matches_archived_rolling_feature_semantics() -> None:
+def test_generate_dataset_matches_benchmark_rolling_feature_semantics() -> None:
     dataset = generate_dataset(n_groups=1, history_length=3, rng=np.random.default_rng(0))
     first_group = dataset[dataset["id"] == 0].reset_index(drop=True)
     spend = np.asarray(first_group["spend"], dtype=float)

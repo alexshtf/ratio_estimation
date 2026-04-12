@@ -37,7 +37,7 @@ packages = ["src/ratio_estimation"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["artifacts", "notebooks/archive"]
+extend-exclude = ["artifacts"]
 
 [tool.ruff.lint]
 select = ["B", "E", "F", "I", "UP"]
@@ -45,7 +45,6 @@ select = ["B", "E", "F", "I", "UP"]
 [tool.ruff.lint.per-file-ignores]
 "tests/*.py" = ["E741"]
 "notebooks/*.ipynb" = ["E402"]
-"notebooks/archive/*.ipynb" = ["E402"]
 
 [tool.pyright]
 typeCheckingMode = "basic"
