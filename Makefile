@@ -9,8 +9,10 @@ STEP_SIZE ?= 0.1
 REGULARIZATION ?= 1.0
 TUNE_GROUPS ?= 1000
 TEST_GROUPS ?= 20000
+MODELS ?= quadratic
+TAIL_FRACTION ?= 0.9
 
-.PHONY: help sync lock lint format format-check typecheck test check compare tune benchmark lab
+.PHONY: help sync lock lint format format-check typecheck test check compare tune benchmark stream lab
 
 help:
 	@printf "Available targets:\n"
@@ -25,11 +27,12 @@ help:
 	@printf "  compare       Compare baseline experiment runners\n"
 	@printf "  tune          Tune the proximal learner with Optuna\n"
 	@printf "  benchmark     Reproduce the archived same-vs-shifted benchmark tables\n"
+	@printf "  stream        Run the archived single-stream sanity-check workflow\n"
 	@printf "  lab           Launch JupyterLab\n"
 	@printf "\n"
 	@printf "Experiment variables:\n"
-	@printf "  GROUPS=%s HISTORY=%s TRIALS=%s SEED=%s STEP_SIZE=%s REGULARIZATION=%s TUNE_GROUPS=%s TEST_GROUPS=%s\n" \
-		"$(GROUPS)" "$(HISTORY)" "$(TRIALS)" "$(SEED)" "$(STEP_SIZE)" "$(REGULARIZATION)" "$(TUNE_GROUPS)" "$(TEST_GROUPS)"
+	@printf "  GROUPS=%s HISTORY=%s TRIALS=%s SEED=%s STEP_SIZE=%s REGULARIZATION=%s TUNE_GROUPS=%s TEST_GROUPS=%s MODELS=%s TAIL_FRACTION=%s\n" \
+		"$(GROUPS)" "$(HISTORY)" "$(TRIALS)" "$(SEED)" "$(STEP_SIZE)" "$(REGULARIZATION)" "$(TUNE_GROUPS)" "$(TEST_GROUPS)" "$(MODELS)" "$(TAIL_FRACTION)"
 
 sync:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --all-groups
@@ -76,6 +79,14 @@ benchmark:
 		--seed $(SEED) \
 		--tune-groups $(TUNE_GROUPS) \
 		--test-groups $(TEST_GROUPS)
+
+stream:
+	$(UV_RUN) python -m experiments.single_stream \
+		--models $(MODELS) \
+		--history $(HISTORY) \
+		--trials $(TRIALS) \
+		--seed $(SEED) \
+		--tail-fraction $(TAIL_FRACTION)
 
 lab:
 	$(UV_RUN) jupyter lab

@@ -6,6 +6,7 @@ import numpy as np
 from experiments.benchmark import run_benchmark
 from experiments.data import generate_dataset
 from experiments.evaluate import diagnose_stream, rollout_stream, run_panel
+from experiments.single_stream import generate_single_stream, run_single_stream_experiment
 from experiments.tune import build_ratio_proximal_model, tune_model
 from ratio_estimation.models import RatioProximalLearner, SoftplusLink
 
@@ -13,6 +14,12 @@ from ratio_estimation.models import RatioProximalLearner, SoftplusLink
 def test_generate_dataset_has_expected_columns() -> None:
     dataset = generate_dataset(n_groups=4, history_length=3, rng=np.random.default_rng(0))
     assert {"id", "offset", "spend", "count", "true_ratio", "features"} <= set(dataset.columns)
+
+
+def test_generate_single_stream_has_expected_columns() -> None:
+    stream = generate_single_stream(history_length=5, rng=np.random.default_rng(0))
+    assert {"id", "offset", "spend", "count", "true_ratio", "features"} <= set(stream.columns)
+    assert set(stream["id"]) == {0}
 
 
 def test_rollout_stream_returns_prediction_frame() -> None:
@@ -92,3 +99,25 @@ def test_run_benchmark_writes_expected_artifacts(tmp_path: Path) -> None:
 
     metadata = json.loads((result.output_dir / "metadata.json").read_text())
     assert metadata["seed"] == 0
+
+
+def test_run_single_stream_experiment_writes_expected_artifacts(tmp_path: Path) -> None:
+    result = run_single_stream_experiment(
+        model_names=["quadratic"],
+        history_length=5,
+        n_trials=1,
+        seed=0,
+        output_dir=tmp_path,
+        mean_samples=16,
+        max_time_offset=20,
+    )
+
+    assert {"model", "tail_loss", "full_mean_loss", "steps"} <= set(result.summary.columns)
+    assert len(result.summary) == 1
+    assert (result.output_dir / "stream.csv").exists()
+    assert (result.output_dir / "stream.json").exists()
+    assert (result.output_dir / "summary.csv").exists()
+    assert (result.output_dir / "best_params.json").exists()
+    assert (result.output_dir / "metadata.json").exists()
+    assert (result.output_dir / "traces" / "quadratic.csv").exists()
+    assert (result.output_dir / "states" / "quadratic.json").exists()
