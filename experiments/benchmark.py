@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import json
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,26 +11,15 @@ import numpy as np
 import optuna
 import pandas as pd
 
-from .baselines import (
-    DecayMode,
-    DecayRatioBaseline,
-    ExponentialRatioBaseline,
-    LinearRegressionBaseline,
-    QuadraticRatioBaseline,
-    RatioOfRegressorsBaseline,
-)
 from .data import generate_dataset
-from .evaluate import StreamingModel, make_json_safe, run_panel
-
-
-@dataclass(frozen=True, slots=True)
-class BenchmarkModelSpec:
-    """One tuned model family in the maintained benchmark suite."""
-
-    name: str
-    input_column: str
-    suggest_params: Any
-    build_model: Any
+from .evaluate import StreamingModel, run_panel
+from .io import (
+    make_json_safe,
+    timestamped_output_dir,
+    write_dataframe_artifacts,
+    write_json_artifact,
+)
+from .registry import ExperimentModelSpec, benchmark_model_specs
 
 
 @dataclass(slots=True)
@@ -47,146 +34,15 @@ class BenchmarkResult:
 
 def default_output_dir() -> Path:
     """Return a timestamped default artifact directory."""
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return Path("artifacts/benchmarks") / f"benchmark-{timestamp}"
+    return timestamped_output_dir("artifacts/benchmarks", "benchmark")
+
+
+type BenchmarkModelSpec = ExperimentModelSpec
 
 
 def build_benchmark_specs(history_length: int) -> list[BenchmarkModelSpec]:
     """Build the maintained benchmark model suite."""
-    return [
-        BenchmarkModelSpec(
-            name="exponential",
-            input_column="features",
-            suggest_params=lambda trial: {
-                "step_size": trial.suggest_float("step_size", 1e-8, 100.0, log=True),
-                "regularization": trial.suggest_float("regularization", 1e-10, 100.0, log=True),
-            },
-            build_model=lambda params: ExponentialRatioBaseline(
-                dimension=history_length,
-                step_size=params["step_size"],
-                regularization=params["regularization"],
-            ),
-        ),
-        BenchmarkModelSpec(
-            name="ratio_of_regressors",
-            input_column="features",
-            suggest_params=lambda trial: {
-                "numerator_step_size": trial.suggest_float(
-                    "numerator_step_size",
-                    1e-8,
-                    100.0,
-                    log=True,
-                ),
-                "numerator_regularization": trial.suggest_float(
-                    "numerator_regularization",
-                    1e-10,
-                    100.0,
-                    log=True,
-                ),
-                "denominator_step_size": trial.suggest_float(
-                    "denominator_step_size",
-                    1e-8,
-                    100.0,
-                    log=True,
-                ),
-                "denominator_regularization": trial.suggest_float(
-                    "denominator_regularization",
-                    1e-10,
-                    100.0,
-                    log=True,
-                ),
-                "epsilon": trial.suggest_float("epsilon", 1e-10, 1.0, log=True),
-            },
-            build_model=lambda params: RatioOfRegressorsBaseline(
-                dimension=history_length,
-                numerator_step_size=params["numerator_step_size"],
-                numerator_regularization=params["numerator_regularization"],
-                denominator_step_size=params["denominator_step_size"],
-                denominator_regularization=params["denominator_regularization"],
-                epsilon=params["epsilon"],
-            ),
-        ),
-        BenchmarkModelSpec(
-            name="quadratic",
-            input_column="features",
-            suggest_params=lambda trial: {
-                "step_size": trial.suggest_float("step_size", 1e-8, 100.0, log=True),
-                "regularization": trial.suggest_float("regularization", 1e-10, 100.0, log=True),
-            },
-            build_model=lambda params: QuadraticRatioBaseline(
-                dimension=history_length,
-                step_size=params["step_size"],
-                regularization=params["regularization"],
-            ),
-        ),
-        BenchmarkModelSpec(
-            name="linear",
-            input_column="features",
-            suggest_params=lambda trial: {
-                "step_size": trial.suggest_float("step_size", 1e-8, 100.0, log=True),
-                "regularization": trial.suggest_float("regularization", 1e-10, 100.0, log=True),
-            },
-            build_model=lambda params: LinearRegressionBaseline(
-                dimension=history_length,
-                step_size=params["step_size"],
-                regularization=params["regularization"],
-                inverse=False,
-            ),
-        ),
-        BenchmarkModelSpec(
-            name="inverse_linear",
-            input_column="features",
-            suggest_params=lambda trial: {
-                "step_size": trial.suggest_float("step_size", 1e-8, 100.0, log=True),
-                "regularization": trial.suggest_float("regularization", 1e-10, 100.0, log=True),
-            },
-            build_model=lambda params: LinearRegressionBaseline(
-                dimension=history_length,
-                step_size=params["step_size"],
-                regularization=params["regularization"],
-                inverse=True,
-            ),
-        ),
-        BenchmarkModelSpec(
-            name="decay_cost",
-            input_column="offset",
-            suggest_params=lambda trial: {
-                "decay_rate": trial.suggest_float("decay_rate", 0.0, 1.0),
-                "decay_interval": trial.suggest_float("decay_interval", 1.0, 1000.0, log=True),
-            },
-            build_model=lambda params: DecayRatioBaseline(
-                decay_rate=params["decay_rate"],
-                decay_interval=params["decay_interval"],
-                mode=DecayMode.COST,
-            ),
-        ),
-        BenchmarkModelSpec(
-            name="decay_count",
-            input_column="offset",
-            suggest_params=lambda trial: {
-                "decay_rate": trial.suggest_float("decay_rate", 0.0, 1.0),
-                "decay_interval": trial.suggest_float("decay_interval", 1.0, 1000.0, log=True),
-            },
-            build_model=lambda params: DecayRatioBaseline(
-                decay_rate=params["decay_rate"],
-                decay_interval=params["decay_interval"],
-                mode=DecayMode.COUNT,
-            ),
-        ),
-        BenchmarkModelSpec(
-            name="decay_time",
-            input_column="offset",
-            suggest_params=lambda trial: {
-                "decay_rate": trial.suggest_float("decay_rate", 0.0, 1.0),
-                "decay_interval": trial.suggest_float("decay_interval", 1.0, 1000.0, log=True),
-            },
-            build_model=lambda params: DecayRatioBaseline(
-                decay_rate=params["decay_rate"],
-                decay_interval=params["decay_interval"],
-                mode=DecayMode.TIME,
-            ),
-        ),
-    ]
+    return benchmark_model_specs(history_length)
 
 
 def evaluate_spec(
@@ -237,10 +93,9 @@ def write_artifacts(
 ) -> None:
     """Write benchmark artifacts to disk."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    summary.to_csv(output_dir / "summary.csv", index=False)
-    summary.to_json(output_dir / "summary.json", orient="records", indent=2)
-    (output_dir / "best_params.json").write_text(json.dumps(best_params, indent=2))
-    (output_dir / "metadata.json").write_text(json.dumps(make_json_safe(metadata), indent=2))
+    write_dataframe_artifacts(output_dir, "summary", summary)
+    write_json_artifact(output_dir / "best_params.json", best_params)
+    write_json_artifact(output_dir / "metadata.json", metadata)
 
 
 def run_benchmark(

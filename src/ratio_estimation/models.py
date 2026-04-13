@@ -6,6 +6,7 @@ from typing import Protocol
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from ._state import state_snapshot
 from .proximal import (
     exponential_prox,
     positive_square_prox,
@@ -16,11 +17,6 @@ from .proximal import (
 )
 
 FloatArray = NDArray[np.float64]
-
-
-def serialize_array(values: FloatArray | None) -> list[float] | None:
-    """Convert a NumPy array into a JSON-friendly list."""
-    return None if values is None else values.tolist()
 
 
 class PositiveLink(Protocol):
@@ -112,12 +108,12 @@ class RatioProximalLearner:
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current learner state."""
-        return {
-            "link": type(self.link).__name__,
-            "step_size": self.step_size,
-            "regularization": self.regularization,
-            "weights": serialize_array(self.weights),
-        }
+        return state_snapshot(
+            link=type(self.link).__name__,
+            step_size=self.step_size,
+            regularization=self.regularization,
+            weights=self.weights,
+        )
 
 
 @dataclass(slots=True)
@@ -154,11 +150,11 @@ class LinearRatioLearner:
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current learner state."""
-        return {
-            "step_size": self.step_size,
-            "regularization": self.regularization,
-            "weights": serialize_array(self.weights),
-        }
+        return state_snapshot(
+            step_size=self.step_size,
+            regularization=self.regularization,
+            weights=self.weights,
+        )
 
 
 @dataclass(slots=True)
@@ -195,8 +191,8 @@ class LinearInverseRatioLearner:
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current learner state."""
-        return {
-            "step_size": self.step_size,
-            "regularization": self.regularization,
-            "weights": serialize_array(self.weights),
-        }
+        return state_snapshot(
+            step_size=self.step_size,
+            regularization=self.regularization,
+            weights=self.weights,
+        )

@@ -8,10 +8,11 @@ import numpy as np
 import optuna
 import pandas as pd
 
-from ratio_estimation.models import RatioProximalLearner, SoftplusLink
+from ratio_estimation.models import RatioProximalLearner
 
 from .data import generate_dataset
 from .evaluate import StreamingModel, run_panel
+from .registry import ExperimentModelSpec, proximal_softplus_spec
 
 
 def objective(
@@ -51,14 +52,36 @@ def tune_model(
     return study
 
 
+def tune_spec(
+    frame: pd.DataFrame,
+    spec: ExperimentModelSpec,
+    n_trials: int = 20,
+    seed: int = 0,
+) -> optuna.Study:
+    """Tune one experiment spec on a panel dataset."""
+    return tune_model(
+        frame,
+        model_builder=lambda trial: cast(
+            StreamingModel,
+            spec.build_model(spec.suggest_params(trial)),
+        ),
+        n_trials=n_trials,
+        seed=seed,
+        input_column=spec.input_column,
+    )
+
+
+def build_ratio_proximal_spec() -> ExperimentModelSpec:
+    """Return the maintained tuning spec for the softplus proximal learner."""
+    return proximal_softplus_spec()
+
+
 def build_ratio_proximal_model(trial: optuna.Trial) -> RatioProximalLearner:
     """Build the default proximal ratio learner for tuning."""
-    step_size = trial.suggest_float("step_size", 1e-8, 100.0, log=True)
-    regularization = trial.suggest_float("regularization", 1e-10, 100.0, log=True)
-    return RatioProximalLearner(
-        link=SoftplusLink(),
-        step_size=step_size,
-        regularization=regularization,
+    spec = build_ratio_proximal_spec()
+    return cast(
+        RatioProximalLearner,
+        spec.build_model(spec.suggest_params(trial)),
     )
 
 
@@ -87,9 +110,9 @@ def main() -> None:
         history_length=args.history,
         rng=np.random.default_rng(args.seed),
     )
-    study = tune_model(
+    study = tune_spec(
         dataset,
-        build_ratio_proximal_model,
+        build_ratio_proximal_spec(),
         n_trials=args.trials,
         seed=args.seed,
     )

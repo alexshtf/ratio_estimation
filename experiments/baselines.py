@@ -9,11 +9,7 @@ from scipy.optimize import brentq
 from scipy.special import wrightomega
 from sklearn.linear_model import SGDRegressor
 
-
-def serialize_array(values: np.ndarray | None) -> list[float] | None:
-    """Convert a NumPy array into a JSON-friendly list."""
-    return None if values is None else np.asarray(values, dtype=float).tolist()
-
+from ratio_estimation._state import state_snapshot
 
 MAX_LOG_FLOAT = float(np.log(sys.float_info.max))
 
@@ -62,13 +58,13 @@ class RatioOfRegressorsBaseline:
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current baseline state."""
-        return {
-            "epsilon": self.epsilon,
-            "numerator_coef": serialize_array(self.numerator_regressor.coef_),
-            "numerator_intercept": serialize_array(self.numerator_regressor.intercept_),
-            "denominator_coef": serialize_array(self.denominator_regressor.coef_),
-            "denominator_intercept": serialize_array(self.denominator_regressor.intercept_),
-        }
+        return state_snapshot(
+            epsilon=self.epsilon,
+            numerator_coef=self.numerator_regressor.coef_,
+            numerator_intercept=self.numerator_regressor.intercept_,
+            denominator_coef=self.denominator_regressor.coef_,
+            denominator_intercept=self.denominator_regressor.intercept_,
+        )
 
 
 class QuadraticRatioBaseline:
@@ -121,13 +117,13 @@ class QuadraticRatioBaseline:
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current baseline state."""
-        return {
-            "weights": serialize_array(self.weights),
-            "bias": self.bias,
-            "step_size": self.step_size,
-            "regularization": self.regularization,
-            "iteration": self.iteration,
-        }
+        return state_snapshot(
+            weights=self.weights,
+            bias=self.bias,
+            step_size=self.step_size,
+            regularization=self.regularization,
+            iteration=self.iteration,
+        )
 
 
 class ExponentialRatioBaseline:
@@ -177,13 +173,13 @@ class ExponentialRatioBaseline:
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current baseline state."""
-        return {
-            "weights": serialize_array(self.weights),
-            "bias": self.bias,
-            "step_size": self.step_size,
-            "regularization": self.regularization,
-            "iteration": self.iteration,
-        }
+        return state_snapshot(
+            weights=self.weights,
+            bias=self.bias,
+            step_size=self.step_size,
+            regularization=self.regularization,
+            iteration=self.iteration,
+        )
 
 
 class ExponentialQuadraticBaseline:
@@ -250,13 +246,13 @@ class ExponentialQuadraticBaseline:
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current baseline state."""
-        return {
-            "weights": serialize_array(self.weights),
-            "bias": self.bias,
-            "step_size": self.step_size,
-            "regularization": self.regularization,
-            "iteration": self.iteration,
-        }
+        return state_snapshot(
+            weights=self.weights,
+            bias=self.bias,
+            step_size=self.step_size,
+            regularization=self.regularization,
+            iteration=self.iteration,
+        )
 
 
 class LinearRegressionBaseline:
@@ -316,14 +312,14 @@ class LinearRegressionBaseline:
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current baseline state."""
-        return {
-            "weights": serialize_array(self.weights),
-            "bias": self.bias,
-            "step_size": self.step_size,
-            "regularization": self.regularization,
-            "inverse": self.inverse,
-            "iteration": self.iteration,
-        }
+        return state_snapshot(
+            weights=self.weights,
+            bias=self.bias,
+            step_size=self.step_size,
+            regularization=self.regularization,
+            inverse=self.inverse,
+            iteration=self.iteration,
+        )
 
 
 class DecayMode(Enum):
@@ -380,11 +376,11 @@ class DecayRatioBaseline:
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current baseline state."""
-        return {
-            "decay_rate": self.decay_rate,
-            "decay_interval": self.decay_interval,
-            "mode": self.mode.value,
-            "numerator": self.numerator,
-            "denominator": self.denominator,
-            "current_interval": self.current_interval,
-        }
+        return state_snapshot(
+            decay_rate=self.decay_rate,
+            decay_interval=self.decay_interval,
+            mode=self.mode,
+            numerator=self.numerator,
+            denominator=self.denominator,
+            current_interval=self.current_interval,
+        )

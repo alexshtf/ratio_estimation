@@ -2,15 +2,14 @@
 
 import argparse
 from collections.abc import Callable
+from typing import cast
 
 import numpy as np
 import pandas as pd
 
-from ratio_estimation.models import LinearRatioLearner, RatioProximalLearner, SoftplusLink
-
-from .baselines import LinearRegressionBaseline, RatioOfRegressorsBaseline
 from .data import generate_dataset
 from .evaluate import StreamingModel, run_panel
+from .registry import comparison_model_factories
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,30 +46,10 @@ def build_model_factories(
     regularization: float,
 ) -> dict[str, Callable[[], StreamingModel]]:
     """Build the default model comparison registry."""
-    return {
-        "proximal_softplus": lambda: RatioProximalLearner(
-            link=SoftplusLink(),
-            step_size=step_size,
-            regularization=regularization,
-        ),
-        "linear_ratio": lambda: LinearRatioLearner(
-            step_size=step_size,
-            regularization=regularization,
-        ),
-        "linear_regression": lambda: LinearRegressionBaseline(
-            dimension=history_length,
-            step_size=step_size,
-            regularization=regularization,
-            inverse=False,
-        ),
-        "ratio_of_regressors": lambda: RatioOfRegressorsBaseline(
-            dimension=history_length,
-            numerator_step_size=step_size,
-            numerator_regularization=regularization,
-            denominator_step_size=step_size,
-            denominator_regularization=regularization,
-        ),
-    }
+    return cast(
+        dict[str, Callable[[], StreamingModel]],
+        comparison_model_factories(history_length, step_size, regularization),
+    )
 
 
 def compare_models(

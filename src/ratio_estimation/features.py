@@ -25,9 +25,18 @@ class FeatureBlock(Protocol):
 
 def shift_left_append(values: FloatArray, value: float) -> FloatArray:
     """Shift a 1D array left and append one new value."""
-    shifted = np.roll(values, -1)
+    shifted = np.empty_like(values)
+    if len(values) > 1:
+        shifted[:-1] = values[1:]
     shifted[-1] = value
     return shifted
+
+
+def _shift_left_append_inplace(values: FloatArray, value: float) -> None:
+    """Shift a 1D array left in place and append one new value."""
+    if len(values) > 1:
+        values[:-1] = values[1:]
+    values[-1] = value
 
 
 def share_normalizer(numerator: float, denominator: float) -> float:
@@ -56,19 +65,30 @@ class RollingMeanWindow:
     window_size: int = 1
     numerator_history: FloatArray = field(init=False, repr=False)
     denominator_history: FloatArray = field(init=False, repr=False)
+    numerator_sum: float = field(init=False, repr=False)
+    denominator_sum: float = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.numerator_history = np.zeros(self.window_size, dtype=float)
         self.denominator_history = np.zeros(self.window_size, dtype=float)
+        self.numerator_sum = 0.0
+        self.denominator_sum = 0.0
 
     def update(self, numerator: float, denominator: float) -> None:
         """Append one observation to the rolling window."""
-        self.numerator_history = shift_left_append(self.numerator_history, numerator)
-        self.denominator_history = shift_left_append(self.denominator_history, denominator)
+        oldest_numerator = float(self.numerator_history[0])
+        oldest_denominator = float(self.denominator_history[0])
+        _shift_left_append_inplace(self.numerator_history, numerator)
+        _shift_left_append_inplace(self.denominator_history, denominator)
+        self.numerator_sum += numerator - oldest_numerator
+        self.denominator_sum += denominator - oldest_denominator
 
     def mean(self) -> tuple[float, float]:
         """Return the current rolling means."""
-        return float(np.mean(self.numerator_history)), float(np.mean(self.denominator_history))
+        return (
+            float(self.numerator_sum / self.window_size),
+            float(self.denominator_sum / self.window_size),
+        )
 
 
 @dataclass(slots=True)
@@ -90,11 +110,11 @@ class AutoregressiveRatioFeatures:
         self.window.update(numerator, denominator)
         mean_numerator, mean_denominator = self.window.mean()
         normalized_value = self.normalizer(mean_numerator, mean_denominator)
-        self.ratio_history = shift_left_append(
+        _shift_left_append_inplace(
             self.ratio_history,
             float(np.nan_to_num(normalized_value, nan=0.0)),
         )
-        self.missing_history = shift_left_append(
+        _shift_left_append_inplace(
             self.missing_history,
             float(np.isnan(normalized_value)),
         )

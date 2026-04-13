@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import json
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +11,15 @@ import numpy as np
 import optuna
 import pandas as pd
 
-from .baselines import ExponentialQuadraticBaseline
-from .benchmark import BenchmarkModelSpec, build_benchmark_specs
 from .data import add_autoregressive_features, sample_ad_group
-from .evaluate import StreamDiagnostics, diagnose_stream, make_json_safe
+from .evaluate import StreamDiagnostics, diagnose_stream, score_stream_tail
+from .io import (
+    make_json_safe,
+    timestamped_output_dir,
+    write_dataframe_artifacts,
+    write_json_artifact,
+)
+from .registry import ExperimentModelSpec, single_stream_model_specs
 
 
 @dataclass(slots=True)
@@ -32,8 +35,7 @@ class SingleStreamResult:
 
 def default_output_dir() -> Path:
     """Return a timestamped default artifact directory for single-stream runs."""
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return Path("artifacts/single_stream") / f"single-stream-{timestamp}"
+    return timestamped_output_dir("artifacts/single_stream", "single-stream")
 
 
 def generate_single_stream(
@@ -47,27 +49,13 @@ def generate_single_stream(
     return add_autoregressive_features(frame, history_length=history_length)
 
 
-def build_single_stream_specs(history_length: int) -> dict[str, BenchmarkModelSpec]:
+def build_single_stream_specs(history_length: int) -> dict[str, ExperimentModelSpec]:
     """Build the maintained single-stream model registry."""
-    specs = {spec.name: spec for spec in build_benchmark_specs(history_length)}
-    specs["exponential_quadratic"] = BenchmarkModelSpec(
-        name="exponential_quadratic",
-        input_column="features",
-        suggest_params=lambda trial: {
-            "step_size": trial.suggest_float("step_size", 1e-4, 100.0, log=True),
-            "regularization": trial.suggest_float("regularization", 1e-10, 0.1, log=True),
-        },
-        build_model=lambda params: ExponentialQuadraticBaseline(
-            dimension=history_length,
-            step_size=params["step_size"],
-            regularization=params["regularization"],
-        ),
-    )
-    return specs
+    return single_stream_model_specs(history_length)
 
 
 def resolve_model_names(
-    specs: dict[str, BenchmarkModelSpec],
+    specs: dict[str, ExperimentModelSpec],
     model_names: list[str] | tuple[str, ...],
 ) -> list[str]:
     """Resolve user-supplied model names, expanding `all` when requested."""
@@ -84,7 +72,7 @@ def resolve_model_names(
 
 def evaluate_single_stream(
     frame: pd.DataFrame,
-    spec: BenchmarkModelSpec,
+    spec: ExperimentModelSpec,
     params: dict[str, Any],
     tail_fraction: float = 0.9,
 ) -> tuple[float, StreamDiagnostics]:
@@ -100,7 +88,7 @@ def evaluate_single_stream(
 
 def tune_single_stream(
     frame: pd.DataFrame,
-    spec: BenchmarkModelSpec,
+    spec: ExperimentModelSpec,
     n_trials: int = 50,
     seed: int = 0,
     tail_fraction: float = 0.9,
@@ -111,13 +99,12 @@ def tune_single_stream(
 
     def objective(trial: optuna.Trial) -> float:
         params = spec.suggest_params(trial)
-        tail_loss, _ = evaluate_single_stream(
+        return score_stream_tail(
             frame,
-            spec,
-            params,
+            spec.build_model(params),
+            input_column=spec.input_column,
             tail_fraction=tail_fraction,
         )
-        return tail_loss
 
     study.optimize(objective, n_trials=n_trials)
     return study
@@ -138,20 +125,14 @@ def write_artifacts(
     trace_dir.mkdir(exist_ok=True)
     state_dir.mkdir(exist_ok=True)
 
-    stream_json = stream.assign(features=stream["features"].map(list))
-    stream.to_csv(output_dir / "stream.csv", index=False)
-    stream_json.to_json(output_dir / "stream.json", orient="records", indent=2)
-    summary.to_csv(output_dir / "summary.csv", index=False)
-    summary.to_json(output_dir / "summary.json", orient="records", indent=2)
-    (output_dir / "best_params.json").write_text(json.dumps(best_params, indent=2))
-    (output_dir / "metadata.json").write_text(json.dumps(make_json_safe(metadata), indent=2))
+    write_dataframe_artifacts(output_dir, "stream", stream, array_columns=("features",))
+    write_dataframe_artifacts(output_dir, "summary", summary)
+    write_json_artifact(output_dir / "best_params.json", best_params)
+    write_json_artifact(output_dir / "metadata.json", metadata)
 
     for model_name, diagnostics in diagnostics_by_model.items():
-        diagnostics.trace.to_csv(trace_dir / f"{model_name}.csv", index=False)
-        diagnostics.trace.to_json(trace_dir / f"{model_name}.json", orient="records", indent=2)
-        (state_dir / f"{model_name}.json").write_text(
-            json.dumps(make_json_safe(diagnostics.final_state), indent=2)
-        )
+        write_dataframe_artifacts(trace_dir, model_name, diagnostics.trace)
+        write_json_artifact(state_dir / f"{model_name}.json", diagnostics.final_state)
 
 
 def run_single_stream_experiment(

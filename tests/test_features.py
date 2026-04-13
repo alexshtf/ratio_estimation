@@ -15,6 +15,8 @@ def test_rolling_mean_window_tracks_recent_values() -> None:
     window.update(4.0, 5.0)
     window.update(7.0, 8.0)
     assert window.mean() == (4.0, 5.0)
+    window.update(10.0, 11.0)
+    assert window.mean() == (7.0, 8.0)
 
 
 def test_autoregressive_features_store_ratio_history() -> None:

@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
 
 
 def bounded_periodic_series(
@@ -86,19 +87,19 @@ def sample_ad_group(
 
 def add_autoregressive_features(frame: pd.DataFrame, history_length: int = 3) -> pd.DataFrame:
     """Add padded rolling ratio-share features, including the current observation."""
+    if frame.empty:
+        result = frame.copy()
+        result["features"] = pd.Series(dtype=object)
+        return result
+
     spend = frame["spend"].to_numpy(dtype=float)
     count = frame["count"].to_numpy(dtype=float)
     ratio_share = spend / (spend + count)
-    features = [
-        np.pad(
-            ratio_share[max(0, index - history_length + 1) : index + 1],
-            (max(0, history_length - index - 1), 0),
-        )
-        for index in range(len(frame))
-    ]
+    padded_share = np.pad(ratio_share, (history_length - 1, 0))
+    feature_matrix = sliding_window_view(padded_share, history_length).copy()
 
     result = frame.copy()
-    result["features"] = features
+    result["features"] = list(feature_matrix)
     return result
 
 
