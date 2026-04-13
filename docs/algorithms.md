@@ -128,6 +128,11 @@ The experiment layer includes simpler comparison models:
 
 These are useful comparison points, but the core library is organized around the direct ratio loss and its proximal updates.
 
+The maintained benchmark report keeps the weighted mean log-error summary table and adds
+weighted REC curves for the `tune`, `same`, and `shifted` splits. Those REC curves also
+include the online `campaign_running_ratio` baseline, which predicts each campaign's
+cumulative observed spend-to-count ratio before the current update.
+
 ## Further Reading In Code
 
 The main implementation lives in:

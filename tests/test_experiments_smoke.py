@@ -1,12 +1,27 @@
 import json
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
-from experiments.benchmark import build_benchmark_specs, run_benchmark
+from experiments.baselines import CampaignRunningRatioBaseline
+from experiments.benchmark import (
+    BASELINE_MODEL_NAME,
+    _weighted_rec_curve,
+    build_benchmark_specs,
+    run_benchmark,
+)
 from experiments.compare import compare_models
 from experiments.data import generate_dataset
-from experiments.evaluate import diagnose_stream, rollout_stream, run_panel, score_stream_tail
+from experiments.evaluate import (
+    PanelLossSamples,
+    diagnose_stream,
+    panel_loss_samples,
+    rollout_stream,
+    run_panel,
+    score_stream_tail,
+    summarize_panel_losses,
+)
 from experiments.single_stream import (
     build_single_stream_specs,
     generate_single_stream,
@@ -76,6 +91,55 @@ def test_run_panel_smoke() -> None:
         ),
     )
     assert np.isfinite(mean_loss)
+
+
+def test_panel_loss_samples_match_run_panel_summary() -> None:
+    dataset = generate_dataset(n_groups=6, history_length=4, rng=np.random.default_rng(0))
+    mean_loss, stderr = cast(
+        tuple[float, float],
+        run_panel(
+            dataset,
+            model_factory=lambda: RatioProximalLearner(
+                link=SoftplusLink(),
+                step_size=0.1,
+                regularization=1.0,
+            ),
+            return_stderr=True,
+        ),
+    )
+    samples = panel_loss_samples(
+        dataset,
+        model_factory=lambda: RatioProximalLearner(
+            link=SoftplusLink(),
+            step_size=0.1,
+            regularization=1.0,
+        ),
+    )
+    sample_mean_loss, sample_stderr = summarize_panel_losses(samples)
+    np.testing.assert_allclose(sample_mean_loss, mean_loss)
+    np.testing.assert_allclose(sample_stderr, stderr)
+
+
+def test_campaign_running_ratio_baseline_uses_cumulative_history() -> None:
+    baseline = CampaignRunningRatioBaseline()
+    assert baseline.predict() == 1.0
+    baseline.update(x=0.0, numerator=10.0, denominator=2.0)
+    assert baseline.predict() == 5.0
+    baseline.update(x=0.0, numerator=6.0, denominator=3.0)
+    np.testing.assert_allclose(baseline.predict(), 16.0 / 5.0)
+
+
+def test_weighted_rec_curve_is_monotone_and_ends_at_one() -> None:
+    curve = _weighted_rec_curve(
+        PanelLossSamples(
+            weights=np.array([1.0, 2.0, 1.0]),
+            losses=np.array([0.3, 0.1, 0.3]),
+        )
+    )
+    np.testing.assert_allclose(curve.error_thresholds, np.array([0.0, 0.1, 0.3]))
+    np.testing.assert_allclose(curve.cdf, np.array([0.0, 0.5, 1.0]))
+    assert np.all(np.diff(curve.error_thresholds) >= 0.0)
+    assert np.all(np.diff(curve.cdf) >= 0.0)
 
 
 def test_compare_models_smoke() -> None:
@@ -158,14 +222,22 @@ def test_run_benchmark_writes_expected_artifacts(tmp_path: Path) -> None:
         "shifted_loss",
         "shifted_stderr",
     } <= set(result.summary.columns)
-    assert len(result.summary) == 8
+    assert BASELINE_MODEL_NAME in set(result.summary["model"])
+    assert len(result.summary) == 9
     assert (result.output_dir / "summary.csv").exists()
     assert (result.output_dir / "summary.json").exists()
     assert (result.output_dir / "best_params.json").exists()
     assert (result.output_dir / "metadata.json").exists()
+    assert result.report_path == result.output_dir / "report.html"
+    assert result.report_path.exists()
 
     metadata = json.loads((result.output_dir / "metadata.json").read_text())
     assert metadata["seed"] == 0
+    assert metadata["artifacts"]["report_html"] == str(result.report_path)
+
+    report_html = result.report_path.read_text()
+    assert "<svg" in report_html
+    assert "campaign_running_ratio" in report_html
 
 
 def test_run_single_stream_experiment_writes_expected_artifacts(tmp_path: Path) -> None:

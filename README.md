@@ -73,9 +73,12 @@ make benchmark TRIALS=100 HISTORY=4 SEED=0 TUNE_GROUPS=1000 TEST_GROUPS=20000
 make stream MODELS=quadratic TRIALS=50 HISTORY=5 SEED=0 TAIL_FRACTION=0.9
 ```
 
-`make benchmark` prints the same-distribution vs shifted-distribution table and writes
-`summary.csv`, `summary.json`, `best_params.json`, and `metadata.json` under
+`make benchmark` prints the maintained summary table and writes `summary.csv`,
+`summary.json`, `best_params.json`, `metadata.json`, and `report.html` under
 `artifacts/benchmarks/...`.
+
+The HTML report embeds one three-panel SVG REC figure for the `tune`, `same`, and
+`shifted` splits, and always includes the causal `campaign_running_ratio` baseline.
 
 `make stream` tunes one or more models on a single synthetic stream, writes the stream,
 per-model traces, final states, and summary files under `artifacts/single_stream/...`, and

@@ -41,6 +41,14 @@ class StreamDiagnostics:
 
 
 @dataclass(slots=True)
+class PanelLossSamples:
+    """Retained post-warmup sample weights and losses from one panel rollout."""
+
+    weights: np.ndarray
+    losses: np.ndarray
+
+
+@dataclass(slots=True)
 class _StreamArrays:
     """Array-backed columns for one streaming evaluation loop."""
 
@@ -161,14 +169,20 @@ def weighted_mean_and_stderr(weights: np.ndarray, values: np.ndarray) -> tuple[f
     return mean_value, float(np.sqrt(stderr_squared))
 
 
-def run_panel(
+def summarize_panel_losses(samples: PanelLossSamples) -> tuple[float, float]:
+    """Return the weighted mean and standard error for retained panel losses."""
+    if len(samples.losses) == 0:
+        return float("nan"), float("nan")
+    return weighted_mean_and_stderr(samples.weights, samples.losses)
+
+
+def panel_loss_samples(
     frame: pd.DataFrame,
     model_factory: Callable[[], StreamingModel],
     input_column: str = "features",
     warmup_steps: int = 2,
-    return_stderr: bool = False,
-) -> float | tuple[float, float]:
-    """Run one model per panel id and return the weighted mean log error."""
+) -> PanelLossSamples:
+    """Run one model per panel id and return retained post-warmup loss samples."""
     models: dict[int, StreamingModel] = {}
     step_counts = defaultdict(int)
     ids = frame["id"].to_numpy(dtype=np.int64, copy=False)
@@ -193,10 +207,25 @@ def run_panel(
         model.update(x, numerator, denominator)
         step_counts[group_key] += 1
 
-    if n_samples == 0:
-        return (float("nan"), float("nan")) if return_stderr else float("nan")
+    return PanelLossSamples(
+        weights=sample_weights[:n_samples].copy(),
+        losses=sample_losses[:n_samples].copy(),
+    )
 
-    weights = sample_weights[:n_samples]
-    losses = sample_losses[:n_samples]
-    mean_loss, stderr = weighted_mean_and_stderr(weights, losses)
+
+def run_panel(
+    frame: pd.DataFrame,
+    model_factory: Callable[[], StreamingModel],
+    input_column: str = "features",
+    warmup_steps: int = 2,
+    return_stderr: bool = False,
+) -> float | tuple[float, float]:
+    """Run one model per panel id and return the weighted mean log error."""
+    samples = panel_loss_samples(
+        frame,
+        model_factory=model_factory,
+        input_column=input_column,
+        warmup_steps=warmup_steps,
+    )
+    mean_loss, stderr = summarize_panel_losses(samples)
     return (mean_loss, stderr) if return_stderr else mean_loss

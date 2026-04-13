@@ -26,7 +26,7 @@ help:
 	@printf "  check         Run lint, format-check, typecheck, and test\n"
 	@printf "  compare       Compare baseline experiment runners\n"
 	@printf "  tune          Tune the proximal learner with Optuna\n"
-	@printf "  benchmark     Run the maintained same-vs-shifted benchmark tables\n"
+	@printf "  benchmark     Run the maintained benchmark tables and REC report\n"
 	@printf "  stream        Run the maintained single-stream sanity-check workflow\n"
 	@printf "  lab           Launch JupyterLab\n"
 	@printf "\n"

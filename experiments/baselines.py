@@ -67,6 +67,36 @@ class RatioOfRegressorsBaseline:
         )
 
 
+class CampaignRunningRatioBaseline:
+    """Predict each campaign's cumulative observed ratio before the current update."""
+
+    def __init__(self, default_prediction: float = 1.0) -> None:
+        self.default_prediction = default_prediction
+        self.cumulative_numerator = 0.0
+        self.cumulative_denominator = 0.0
+
+    def update(self, x: ArrayLike, numerator: float, denominator: float) -> None:
+        """Accumulate one streaming observation."""
+        _ = x
+        self.cumulative_numerator += numerator
+        self.cumulative_denominator += denominator
+
+    def predict(self, x: ArrayLike | None = None) -> float:
+        """Return the cumulative ratio observed before the current update."""
+        _ = x
+        if self.cumulative_denominator <= 0.0:
+            return self.default_prediction
+        return float(self.cumulative_numerator / self.cumulative_denominator)
+
+    def state_dict(self) -> dict[str, object]:
+        """Return a lightweight snapshot of the current baseline state."""
+        return state_snapshot(
+            default_prediction=self.default_prediction,
+            cumulative_numerator=self.cumulative_numerator,
+            cumulative_denominator=self.cumulative_denominator,
+        )
+
+
 class QuadraticRatioBaseline:
     """Fit a positive linear ratio model with a quadratic loss."""
 
