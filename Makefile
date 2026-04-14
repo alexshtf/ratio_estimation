@@ -2,6 +2,7 @@ UV_CACHE_DIR ?= /tmp/uv-cache
 UV_RUN = UV_CACHE_DIR=$(UV_CACHE_DIR) uv run
 
 GROUPS ?= 25
+PLOT_GROUPS ?= 6
 HISTORY ?= 6
 TRIALS ?= 20
 SEED ?= 0
@@ -12,7 +13,7 @@ TEST_GROUPS ?= 20000
 MODELS ?= quadratic
 TAIL_FRACTION ?= 0.9
 
-.PHONY: help sync lock lint format format-check typecheck test check compare tune benchmark stream lab
+.PHONY: help sync lock lint format format-check typecheck test check compare tune benchmark stream plot-groups lab
 
 help:
 	@printf "Available targets:\n"
@@ -28,11 +29,12 @@ help:
 	@printf "  tune          Tune the proximal learner with Optuna\n"
 	@printf "  benchmark     Run the maintained benchmark tables and REC report\n"
 	@printf "  stream        Run the maintained single-stream sanity-check workflow\n"
+	@printf "  plot-groups   Plot several generated campaigns from the current experiment generator\n"
 	@printf "  lab           Launch JupyterLab\n"
 	@printf "\n"
 	@printf "Experiment variables:\n"
-	@printf "  GROUPS=%s HISTORY=%s TRIALS=%s SEED=%s STEP_SIZE=%s REGULARIZATION=%s TUNE_GROUPS=%s TEST_GROUPS=%s MODELS=%s TAIL_FRACTION=%s\n" \
-		"$(GROUPS)" "$(HISTORY)" "$(TRIALS)" "$(SEED)" "$(STEP_SIZE)" "$(REGULARIZATION)" "$(TUNE_GROUPS)" "$(TEST_GROUPS)" "$(MODELS)" "$(TAIL_FRACTION)"
+	@printf "  GROUPS=%s PLOT_GROUPS=%s HISTORY=%s TRIALS=%s SEED=%s STEP_SIZE=%s REGULARIZATION=%s TUNE_GROUPS=%s TEST_GROUPS=%s MODELS=%s TAIL_FRACTION=%s\n" \
+		"$(GROUPS)" "$(PLOT_GROUPS)" "$(HISTORY)" "$(TRIALS)" "$(SEED)" "$(STEP_SIZE)" "$(REGULARIZATION)" "$(TUNE_GROUPS)" "$(TEST_GROUPS)" "$(MODELS)" "$(TAIL_FRACTION)"
 
 sync:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --all-groups
@@ -87,6 +89,11 @@ stream:
 		--trials $(TRIALS) \
 		--seed $(SEED) \
 		--tail-fraction $(TAIL_FRACTION)
+
+plot-groups:
+	$(UV_RUN) python -m experiments.plot_groups \
+		--groups $(PLOT_GROUPS) \
+		--seed $(SEED)
 
 lab:
 	$(UV_RUN) jupyter lab

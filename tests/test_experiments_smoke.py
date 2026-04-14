@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import cast
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import experiments.benchmark as benchmark_module
@@ -31,6 +32,7 @@ from experiments.evaluate import (
     score_stream_tail,
     summarize_panel_losses,
 )
+from experiments.plot_groups import _observed_ratio_series, run_plot_groups
 from experiments.single_stream import (
     build_single_stream_specs,
     generate_single_stream,
@@ -378,6 +380,40 @@ def test_run_benchmark_reports_progress_transitions(
     assert baseline_row.tune_sec_per_trial == "--"
     assert baseline_row.last_loss != "--"
     assert baseline_row.best_loss != "--"
+
+
+def test_observed_ratio_series_masks_zero_count_rows() -> None:
+    frame = pd.DataFrame(
+        {
+            "id": [0, 0, 0],
+            "offset": [0, 1, 2],
+            "spend": [6.0, 4.0, 9.0],
+            "count": [3, 0, 6],
+            "true_ratio": [2.0, 4.0, 1.5],
+        }
+    )
+    observed_ratio = _observed_ratio_series(frame)
+    np.testing.assert_allclose(observed_ratio[[0, 2]], np.array([2.0, 1.5]))
+    assert np.isnan(observed_ratio[1])
+
+
+def test_run_plot_groups_writes_html_report(tmp_path: Path) -> None:
+    result = run_plot_groups(n_groups=2, seed=0, output_dir=tmp_path)
+
+    assert len(result.groups) == 2
+    assert result.report_path == result.output_dir / "report.html"
+    assert result.report_path.exists()
+    assert (result.output_dir / "metadata.json").exists()
+
+    metadata = json.loads((result.output_dir / "metadata.json").read_text())
+    assert metadata["seed"] == 0
+    assert metadata["groups"] == 2
+    assert metadata["artifacts"]["report_html"] == str(result.report_path)
+
+    report_html = result.report_path.read_text()
+    assert "<svg" in report_html
+    assert "Campaign 0" in report_html
+    assert "Observed Ratio is shown only where count &gt; 0." in report_html
 
 
 def test_run_single_stream_experiment_writes_expected_artifacts(tmp_path: Path) -> None:

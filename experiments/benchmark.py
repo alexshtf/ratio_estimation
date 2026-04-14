@@ -29,6 +29,7 @@ from .evaluate import (
 )
 from .io import (
     make_json_safe,
+    strip_svg_preamble,
     timestamped_output_dir,
     write_dataframe_artifacts,
     write_json_artifact,
@@ -490,16 +491,6 @@ def _report_run_lines(metadata: dict[str, Any]) -> list[str]:
     ]
 
 
-def _strip_svg_preamble(svg_markup: str) -> str:
-    """Remove the XML preamble so the SVG can be inlined directly into HTML."""
-    lines = [
-        line
-        for line in svg_markup.splitlines()
-        if not line.startswith("<?xml") and not line.startswith("<!DOCTYPE")
-    ]
-    return "\n".join(lines)
-
-
 def _render_rec_figure_svg(
     curves_by_dataset: dict[str, dict[str, _RecCurve]],
     model_order: list[str],
@@ -540,7 +531,7 @@ def _render_rec_figure_svg(
     buffer = StringIO()
     figure.savefig(buffer, format="svg")
     plt.close(figure)
-    return _strip_svg_preamble(buffer.getvalue())
+    return strip_svg_preamble(buffer.getvalue())
 
 
 def _render_report_html(summary: pd.DataFrame, metadata: dict[str, Any], svg_markup: str) -> str:
