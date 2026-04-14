@@ -5,10 +5,16 @@ from typing import cast
 import numpy as np
 import pandas as pd
 import pytest
+from numpy.typing import ArrayLike
 
 import experiments.benchmark as benchmark_module
 import experiments.data as data_module
-from experiments.baselines import CampaignRunningRatioBaseline, DecayMode, DecayRatioBaseline
+from experiments.baselines import (
+    CampaignRunningRatioBaseline,
+    DecayMode,
+    DecayRatioBaseline,
+    RatioOfRegressorsBaseline,
+)
 from experiments.benchmark import (
     BASELINE_MODEL_NAME,
     BENCHMARK_FLOAT_DISPLAY_WIDTH,
@@ -256,6 +262,54 @@ def test_panel_loss_samples_match_run_panel_summary() -> None:
     sample_mean_loss, sample_stderr = summarize_panel_losses(samples)
     np.testing.assert_allclose(sample_mean_loss, mean_loss)
     np.testing.assert_allclose(sample_stderr, stderr)
+
+
+def test_panel_loss_samples_builds_one_model_per_group() -> None:
+    frame = pd.DataFrame(
+        {
+            "id": [0, 1, 0, 1],
+            "features": [np.zeros(2)] * 4,
+            "spend": [1.0, 2.0, 3.0, 4.0],
+            "count": [1.0, 1.0, 1.0, 1.0],
+        }
+    )
+
+    class _DummyModel:
+        def predict(self, x: ArrayLike) -> float:
+            _ = x
+            return 1.0
+
+        def update(self, x: ArrayLike, numerator: float, denominator: float) -> None:
+            _ = x, numerator, denominator
+
+        def state_dict(self) -> dict[str, object]:
+            return {}
+
+    build_count = 0
+
+    def model_factory() -> _DummyModel:
+        nonlocal build_count
+        build_count += 1
+        return _DummyModel()
+
+    panel_loss_samples(frame, model_factory=model_factory, warmup_steps=0)
+
+    assert build_count == 2
+
+
+def test_ratio_of_regressors_baseline_uses_lazy_cold_start() -> None:
+    baseline = RatioOfRegressorsBaseline(
+        dimension=3,
+        numerator_step_size=0.1,
+        numerator_regularization=1.0,
+        denominator_step_size=0.1,
+        denominator_regularization=1.0,
+    )
+
+    assert baseline.predict(np.array([1.0, -2.0, 0.5])) == 1.0
+    state = baseline.state_dict()
+    np.testing.assert_allclose(cast(list[float], state["numerator_coef"]), np.zeros(3))
+    np.testing.assert_allclose(cast(list[float], state["denominator_coef"]), np.zeros(3))
 
 
 def test_weighted_mean_and_stderr_returns_zero_stderr_for_one_sample() -> None:

@@ -234,7 +234,10 @@ def panel_loss_samples(
         start=1,
     ):
         group_key = int(group_id)
-        model = models.setdefault(group_key, model_factory())
+        model = models.get(group_key)
+        if model is None:
+            model = model_factory()
+            models[group_key] = model
         prediction = float(model.predict(x))
         loss = log_ratio_error(prediction, numerator, denominator)
 
