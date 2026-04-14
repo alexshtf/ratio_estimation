@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import argparse
 import html
+import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
-from typing import Any, cast
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import optuna
@@ -18,6 +21,7 @@ from .baselines import CampaignRunningRatioBaseline
 from .data import generate_dataset
 from .evaluate import (
     PanelLossSamples,
+    PanelProgressCallback,
     StreamingModel,
     panel_loss_samples,
     run_panel,
@@ -31,11 +35,19 @@ from .io import (
 )
 from .registry import ExperimentModelSpec, benchmark_model_specs
 
+if TYPE_CHECKING:
+    from rich.console import RenderableType
+
 BASELINE_MODEL_NAME = "campaign_running_ratio"
 BASELINE_INPUT_COLUMN = "offset"
 BASELINE_DEFAULT_PREDICTION = 1.0
 BENCHMARK_WARMUP_STEPS = 2
+BENCHMARK_EVALUATION_PROGRESS_FREQUENCY = 1_000
+BENCHMARK_FLOAT_DISPLAY_WIDTH = 10
 REPORT_DATASETS = ("tune", "same", "shifted")
+
+type BenchmarkModelSpec = ExperimentModelSpec
+type TuneProgressCallback = Callable[[int, int, float, float, float], None]
 
 
 @dataclass(slots=True)
@@ -62,17 +74,248 @@ class _PanelEvaluation:
     rec_curve: _RecCurve
 
 
+@dataclass(frozen=True, slots=True)
+class _ProgressTableWidths:
+    """Pinned column widths for the live rich benchmark progress table."""
+
+    model: int
+    split: int
+    progress: int
+    loss: int
+    tune_sec_per_trial: int
+    status: int
+
+
+@dataclass(slots=True)
+class _ProgressRowState:
+    """Display state for one model row in the live benchmark progress table."""
+
+    model: str
+    split: str = "pending"
+    progress: str = "--"
+    last_loss: str = "--"
+    best_loss: str = "--"
+    tune_sec_per_trial: str = "--"
+    status: str = "waiting"
+
+
+class _BenchmarkProgress:
+    """Common interface for live and no-op benchmark progress controllers."""
+
+    enabled = False
+
+    def __enter__(self) -> _BenchmarkProgress:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        _ = exc_type, exc, traceback
+
+    def update_row(self, model_name: str, **changes: str) -> None:
+        """Apply display updates to one progress row."""
+        _ = model_name, changes
+
+
+class _NullBenchmarkProgress(_BenchmarkProgress):
+    """Do nothing when the benchmark runs outside an interactive terminal."""
+
+
+class _RichBenchmarkProgress(_BenchmarkProgress):
+    """Render one live progress table for the full benchmark run."""
+
+    enabled = True
+
+    def __init__(self, model_names: list[str], widths: _ProgressTableWidths) -> None:
+        from rich.console import Console
+        from rich.live import Live
+
+        self.model_order = model_names
+        self.widths = widths
+        self.rows = {model_name: _ProgressRowState(model=model_name) for model_name in model_names}
+        self.console = Console()
+        self.live = Live(
+            self._render_table(),
+            console=self.console,
+            refresh_per_second=4,
+            transient=False,
+        )
+
+    def __enter__(self) -> _RichBenchmarkProgress:
+        self.live.__enter__()
+        self.live.update(self._render_table(), refresh=True)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.live.update(self._render_table(), refresh=True)
+        self.live.__exit__(exc_type, exc, traceback)
+
+    def update_row(self, model_name: str, **changes: str) -> None:
+        """Apply display updates to one live table row."""
+        row = self.rows[model_name]
+        for field_name, value in changes.items():
+            setattr(row, field_name, value)
+        self.live.update(self._render_table(), refresh=True)
+
+    def _render_table(self) -> RenderableType:
+        """Render the current table state as a rich table object."""
+        from rich.table import Table
+
+        table = Table(title="Benchmark Progress")
+        table.add_column(
+            "Model",
+            width=self.widths.model,
+            min_width=self.widths.model,
+            no_wrap=True,
+        )
+        table.add_column(
+            "Split",
+            width=self.widths.split,
+            min_width=self.widths.split,
+            no_wrap=True,
+        )
+        table.add_column(
+            "Progress",
+            width=self.widths.progress,
+            min_width=self.widths.progress,
+            no_wrap=True,
+        )
+        table.add_column(
+            "Last Loss",
+            justify="right",
+            width=self.widths.loss,
+            min_width=self.widths.loss,
+            no_wrap=True,
+        )
+        table.add_column(
+            "Best Loss",
+            justify="right",
+            width=self.widths.loss,
+            min_width=self.widths.loss,
+            no_wrap=True,
+        )
+        table.add_column(
+            "Tune Sec/Trial",
+            justify="right",
+            width=self.widths.tune_sec_per_trial,
+            min_width=self.widths.tune_sec_per_trial,
+            no_wrap=True,
+        )
+        table.add_column(
+            "Status",
+            width=self.widths.status,
+            min_width=self.widths.status,
+            no_wrap=True,
+        )
+        for model_name in self.model_order:
+            row = self.rows[model_name]
+            table.add_row(
+                row.model,
+                row.split,
+                row.progress,
+                row.last_loss,
+                row.best_loss,
+                row.tune_sec_per_trial,
+                row.status,
+            )
+        return table
+
+
 def default_output_dir() -> Path:
     """Return a timestamped default artifact directory."""
     return timestamped_output_dir("artifacts/benchmarks", "benchmark")
 
 
-type BenchmarkModelSpec = ExperimentModelSpec
-
-
 def build_benchmark_specs(history_length: int) -> list[BenchmarkModelSpec]:
     """Build the maintained benchmark model suite."""
     return benchmark_model_specs(history_length)
+
+
+def _progress_table_widths(
+    model_names: list[str],
+    n_trials: int,
+    max_rows: int,
+) -> _ProgressTableWidths:
+    """Return pinned widths for all rich benchmark progress columns."""
+    return _ProgressTableWidths(
+        model=max(len("Model"), *(len(model_name) for model_name in model_names)),
+        split=max(len("Split"), len("baseline"), len("shifted"), len("evaluating")),
+        progress=max(
+            len("Progress"),
+            len(_format_tuning_progress(n_trials, n_trials)),
+            len(_format_evaluation_progress(max_rows, max_rows)),
+        ),
+        loss=max(len("Last Loss"), len("Best Loss"), BENCHMARK_FLOAT_DISPLAY_WIDTH),
+        tune_sec_per_trial=max(len("Tune Sec/Trial"), BENCHMARK_FLOAT_DISPLAY_WIDTH),
+        status=max(len("Status"), len("evaluating"), len("evaluated")),
+    )
+
+
+def _format_float_cell(value: float | None, width: int = BENCHMARK_FLOAT_DISPLAY_WIDTH) -> str:
+    """Format one float cell with fixed width and no scientific notation."""
+    if value is None or not np.isfinite(value):
+        return "--".rjust(width)
+    return f"{value:>{width}.6f}"
+
+
+def _format_loss(value: float | None) -> str:
+    """Format one optional loss value for the live benchmark table."""
+    return _format_float_cell(value)
+
+
+def _format_tuning_progress(completed_trials: int, total_trials: int) -> str:
+    """Format tuning progress as completed vs total Optuna trials."""
+    return f"{completed_trials} / {total_trials}"
+
+
+def _format_evaluation_progress(completed_rows: int, total_rows: int) -> str:
+    """Format row-based evaluation progress with a whole-percent suffix."""
+    if total_rows <= 0:
+        return "0 / 0 (0%)"
+    clipped_rows = min(completed_rows, total_rows)
+    percent = int(100 * clipped_rows / total_rows)
+    return f"{clipped_rows} / {total_rows} ({percent}%)"
+
+
+def _format_tune_sec_per_trial(elapsed_seconds: float, completed_trials: int) -> str:
+    """Format the model-local wall-clock tuning time per completed trial."""
+    if completed_trials <= 0:
+        return "--".rjust(BENCHMARK_FLOAT_DISPLAY_WIDTH)
+    return f"{elapsed_seconds / completed_trials:>{BENCHMARK_FLOAT_DISPLAY_WIDTH}.2f}"
+
+
+def _should_use_rich_progress(stream: object | None = None) -> bool:
+    """Return whether the benchmark should render the live rich progress table."""
+    output_stream = sys.stdout if stream is None else stream
+    isatty = getattr(output_stream, "isatty", None)
+    return bool(callable(isatty) and isatty())
+
+
+def _build_benchmark_progress(
+    model_names: list[str],
+    n_trials: int,
+    max_rows: int,
+    enabled: bool | None = None,
+) -> _BenchmarkProgress:
+    """Build either the live rich controller or a no-op progress controller."""
+    progress_enabled = _should_use_rich_progress() if enabled is None else enabled
+    if not progress_enabled:
+        return _NullBenchmarkProgress()
+    try:
+        return _RichBenchmarkProgress(
+            model_names,
+            _progress_table_widths(model_names, n_trials=n_trials, max_rows=max_rows),
+        )
+    except ImportError:
+        return _NullBenchmarkProgress()
 
 
 def evaluate_spec(
@@ -123,6 +366,7 @@ def _evaluate_panel(
     frame: pd.DataFrame,
     model_factory: Callable[[], StreamingModel],
     input_column: str,
+    progress_callback: PanelProgressCallback | None = None,
 ) -> _PanelEvaluation:
     """Evaluate one panel and return both summary metrics and the REC curve."""
     samples = panel_loss_samples(
@@ -130,6 +374,8 @@ def _evaluate_panel(
         model_factory=model_factory,
         input_column=input_column,
         warmup_steps=BENCHMARK_WARMUP_STEPS,
+        progress_callback=progress_callback,
+        progress_frequency=BENCHMARK_EVALUATION_PROGRESS_FREQUENCY,
     )
     mean_loss, stderr = summarize_panel_losses(samples)
     return _PanelEvaluation(
@@ -143,16 +389,21 @@ def _evaluate_tuned_spec(
     frame: pd.DataFrame,
     spec: BenchmarkModelSpec,
     params: dict[str, Any],
+    progress_callback: PanelProgressCallback | None = None,
 ) -> _PanelEvaluation:
     """Evaluate one tuned benchmark model and build its REC curve."""
     return _evaluate_panel(
         frame,
         model_factory=lambda: cast(StreamingModel, spec.build_model(params)),
         input_column=spec.input_column,
+        progress_callback=progress_callback,
     )
 
 
-def _evaluate_baseline(frame: pd.DataFrame) -> _PanelEvaluation:
+def _evaluate_baseline(
+    frame: pd.DataFrame,
+    progress_callback: PanelProgressCallback | None = None,
+) -> _PanelEvaluation:
     """Evaluate the untuned campaign running-ratio baseline on one panel."""
     return _evaluate_panel(
         frame,
@@ -160,6 +411,7 @@ def _evaluate_baseline(frame: pd.DataFrame) -> _PanelEvaluation:
             default_prediction=BASELINE_DEFAULT_PREDICTION
         ),
         input_column=BASELINE_INPUT_COLUMN,
+        progress_callback=progress_callback,
     )
 
 
@@ -168,10 +420,12 @@ def tune_spec(
     spec: BenchmarkModelSpec,
     n_trials: int,
     seed: int,
+    progress_callback: TuneProgressCallback | None = None,
 ) -> tuple[dict[str, Any], float, float]:
     """Tune one benchmark model family on one panel."""
     sampler = optuna.samplers.TPESampler(seed=seed)
     study = optuna.create_study(direction="minimize", sampler=sampler)
+    started_at = time.perf_counter()
 
     def objective(trial: optuna.Trial) -> float:
         params = spec.suggest_params(trial)
@@ -179,7 +433,22 @@ def tune_spec(
         trial.set_user_attr("stderr", stderr)
         return mean_loss
 
-    study.optimize(objective, n_trials=n_trials)
+    callbacks: list[Callable[[optuna.Study, optuna.trial.FrozenTrial], None]] = []
+    if progress_callback is not None:
+
+        def report_trial(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+            last_value = np.nan if trial.value is None else trial.value
+            progress_callback(
+                trial.number + 1,
+                n_trials,
+                float(last_value),
+                float(study.best_value),
+                time.perf_counter() - started_at,
+            )
+
+        callbacks.append(report_trial)
+
+    study.optimize(objective, n_trials=n_trials, callbacks=callbacks or None)
     best_trial = study.best_trial
     best_stderr = best_trial.user_attrs.get("stderr", np.nan)
     best_value = np.nan if best_trial.value is None else best_trial.value
@@ -258,7 +527,8 @@ def _render_rec_figure_svg(
                 label=model_name,
             )
         axis.set_title(f"{panel_titles[dataset_name]} REC")
-        axis.set_xlabel("Absolute log-ratio error")
+        axis.set_xscale("asinh", linear_width=0.01)
+        axis.set_xlabel("Absolute log-ratio error (asinh scale)")
         axis.set_ylim(0.0, 1.0)
 
     axes[0].set_ylabel("Spend-weighted CDF")
@@ -323,6 +593,30 @@ def write_artifacts(
     (output_dir / "report.html").write_text(report_html, encoding="utf-8")
 
 
+def _run_evaluation_with_progress(
+    progress: _BenchmarkProgress,
+    model_name: str,
+    split: str,
+    total_rows: int,
+    evaluate_panel: Callable[[PanelProgressCallback], _PanelEvaluation],
+) -> _PanelEvaluation:
+    """Run one evaluation split while streaming row progress into the live table."""
+    progress.update_row(
+        model_name,
+        split=split,
+        progress=_format_evaluation_progress(0, total_rows),
+        status="evaluating",
+    )
+
+    def report_rows(completed_rows: int, total_rows_in_callback: int) -> None:
+        progress.update_row(
+            model_name,
+            progress=_format_evaluation_progress(completed_rows, total_rows_in_callback),
+        )
+
+    return evaluate_panel(report_rows)
+
+
 def run_benchmark(
     n_trials: int = 100,
     history_length: int = 4,
@@ -374,46 +668,162 @@ def run_benchmark(
     best_params: dict[str, dict[str, Any]] = {}
     specs = build_benchmark_specs(history_length)
     study_seeds: dict[str, int] = {}
-    curves_by_dataset = {
-        dataset_name: {} for dataset_name in REPORT_DATASETS
-    }
+    curves_by_dataset = {dataset_name: {} for dataset_name in REPORT_DATASETS}
+    progress = _build_benchmark_progress(
+        [spec.name for spec in specs] + [BASELINE_MODEL_NAME],
+        n_trials=n_trials,
+        max_rows=max(len(tune_frame), len(same_frame), len(shifted_frame)),
+    )
+    previous_optuna_verbosity = optuna.logging.get_verbosity() if progress.enabled else None
+    if previous_optuna_verbosity is not None:
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    for spec in specs:
-        study_seed = int(master_rng.integers(0, np.iinfo(np.uint32).max))
-        study_seeds[spec.name] = study_seed
-        params, _, _ = tune_spec(
-            tune_frame,
-            spec,
-            n_trials=n_trials,
-            seed=study_seed,
-        )
-        tune_evaluation = _evaluate_tuned_spec(tune_frame, spec, params)
-        same_evaluation = _evaluate_tuned_spec(same_frame, spec, params)
-        shifted_evaluation = _evaluate_tuned_spec(shifted_frame, spec, params)
-        rows.append(
-            {
-                "model": spec.name,
-                "tune_loss": tune_evaluation.mean_loss,
-                "tune_stderr": tune_evaluation.stderr,
-                "same_loss": same_evaluation.mean_loss,
-                "same_stderr": same_evaluation.stderr,
-                "shifted_loss": shifted_evaluation.mean_loss,
-                "shifted_stderr": shifted_evaluation.stderr,
-            }
-        )
-        curves_by_dataset["tune"][spec.name] = tune_evaluation.rec_curve
-        curves_by_dataset["same"][spec.name] = same_evaluation.rec_curve
-        curves_by_dataset["shifted"][spec.name] = shifted_evaluation.rec_curve
-        best_params[spec.name] = {
-            "params": params,
-            "tune_loss": tune_evaluation.mean_loss,
-            "tune_stderr": tune_evaluation.stderr,
-            "input_column": spec.input_column,
-        }
+    try:
+        with progress:
+            for spec in specs:
+                progress.update_row(
+                    spec.name,
+                    split="tuning",
+                    progress=_format_tuning_progress(0, n_trials),
+                    status="running",
+                )
 
-    baseline_tune = _evaluate_baseline(tune_frame)
-    baseline_same = _evaluate_baseline(same_frame)
-    baseline_shifted = _evaluate_baseline(shifted_frame)
+                def report_tuning(
+                    completed_trials: int,
+                    total_trials: int,
+                    last_loss: float,
+                    best_loss: float,
+                    elapsed_seconds: float,
+                    model_name: str = spec.name,
+                ) -> None:
+                    progress.update_row(
+                        model_name,
+                        progress=_format_tuning_progress(completed_trials, total_trials),
+                        last_loss=_format_loss(last_loss),
+                        best_loss=_format_loss(best_loss),
+                        tune_sec_per_trial=_format_tune_sec_per_trial(
+                            elapsed_seconds,
+                            completed_trials,
+                        ),
+                        status="running",
+                    )
+
+                study_seed = int(master_rng.integers(0, np.iinfo(np.uint32).max))
+                study_seeds[spec.name] = study_seed
+                params, _, _ = tune_spec(
+                    tune_frame,
+                    spec,
+                    n_trials=n_trials,
+                    seed=study_seed,
+                    progress_callback=report_tuning,
+                )
+                tune_evaluation = _run_evaluation_with_progress(
+                    progress,
+                    spec.name,
+                    split="tune",
+                    total_rows=len(tune_frame),
+                    evaluate_panel=lambda callback, spec=spec, params=params: _evaluate_tuned_spec(
+                        tune_frame,
+                        spec,
+                        params,
+                        progress_callback=callback,
+                    ),
+                )
+                same_evaluation = _run_evaluation_with_progress(
+                    progress,
+                    spec.name,
+                    split="same",
+                    total_rows=len(same_frame),
+                    evaluate_panel=lambda callback, spec=spec, params=params: _evaluate_tuned_spec(
+                        same_frame,
+                        spec,
+                        params,
+                        progress_callback=callback,
+                    ),
+                )
+                shifted_evaluation = _run_evaluation_with_progress(
+                    progress,
+                    spec.name,
+                    split="shifted",
+                    total_rows=len(shifted_frame),
+                    evaluate_panel=lambda callback, spec=spec, params=params: _evaluate_tuned_spec(
+                        shifted_frame,
+                        spec,
+                        params,
+                        progress_callback=callback,
+                    ),
+                )
+                progress.update_row(
+                    spec.name,
+                    progress="done",
+                    status="evaluated",
+                )
+                rows.append(
+                    {
+                        "model": spec.name,
+                        "tune_loss": tune_evaluation.mean_loss,
+                        "tune_stderr": tune_evaluation.stderr,
+                        "same_loss": same_evaluation.mean_loss,
+                        "same_stderr": same_evaluation.stderr,
+                        "shifted_loss": shifted_evaluation.mean_loss,
+                        "shifted_stderr": shifted_evaluation.stderr,
+                    }
+                )
+                curves_by_dataset["tune"][spec.name] = tune_evaluation.rec_curve
+                curves_by_dataset["same"][spec.name] = same_evaluation.rec_curve
+                curves_by_dataset["shifted"][spec.name] = shifted_evaluation.rec_curve
+                best_params[spec.name] = {
+                    "params": params,
+                    "tune_loss": tune_evaluation.mean_loss,
+                    "tune_stderr": tune_evaluation.stderr,
+                    "input_column": spec.input_column,
+                }
+
+            baseline_tune = _run_evaluation_with_progress(
+                progress,
+                BASELINE_MODEL_NAME,
+                split="tune",
+                total_rows=len(tune_frame),
+                evaluate_panel=lambda callback: _evaluate_baseline(
+                    tune_frame,
+                    progress_callback=callback,
+                ),
+            )
+            baseline_same = _run_evaluation_with_progress(
+                progress,
+                BASELINE_MODEL_NAME,
+                split="same",
+                total_rows=len(same_frame),
+                evaluate_panel=lambda callback: _evaluate_baseline(
+                    same_frame,
+                    progress_callback=callback,
+                ),
+            )
+            progress.update_row(
+                BASELINE_MODEL_NAME,
+                last_loss=_format_loss(baseline_same.mean_loss),
+                best_loss=_format_loss(baseline_same.mean_loss),
+            )
+            baseline_shifted = _run_evaluation_with_progress(
+                progress,
+                BASELINE_MODEL_NAME,
+                split="shifted",
+                total_rows=len(shifted_frame),
+                evaluate_panel=lambda callback: _evaluate_baseline(
+                    shifted_frame,
+                    progress_callback=callback,
+                ),
+            )
+            progress.update_row(
+                BASELINE_MODEL_NAME,
+                split="baseline",
+                progress="done",
+                status="evaluated",
+            )
+    finally:
+        if previous_optuna_verbosity is not None:
+            optuna.logging.set_verbosity(previous_optuna_verbosity)
+
     rows.append(
         {
             "model": BASELINE_MODEL_NAME,

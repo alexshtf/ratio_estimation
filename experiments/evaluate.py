@@ -48,6 +48,9 @@ class PanelLossSamples:
     losses: np.ndarray
 
 
+type PanelProgressCallback = Callable[[int, int], None]
+
+
 @dataclass(slots=True)
 class _StreamArrays:
     """Array-backed columns for one streaming evaluation loop."""
@@ -181,6 +184,8 @@ def panel_loss_samples(
     model_factory: Callable[[], StreamingModel],
     input_column: str = "features",
     warmup_steps: int = 2,
+    progress_callback: PanelProgressCallback | None = None,
+    progress_frequency: int = 1_000,
 ) -> PanelLossSamples:
     """Run one model per panel id and return retained post-warmup loss samples."""
     models: dict[int, StreamingModel] = {}
@@ -192,8 +197,13 @@ def panel_loss_samples(
     sample_weights = np.empty(len(frame), dtype=float)
     sample_losses = np.empty(len(frame), dtype=float)
     n_samples = 0
+    total_rows = len(ids)
+    callback_frequency = max(1, progress_frequency)
 
-    for group_id, x, numerator, denominator in zip(ids, inputs, spend, count, strict=True):
+    for row_index, (group_id, x, numerator, denominator) in enumerate(
+        zip(ids, inputs, spend, count, strict=True),
+        start=1,
+    ):
         group_key = int(group_id)
         model = models.setdefault(group_key, model_factory())
         prediction = float(model.predict(x))
@@ -206,6 +216,10 @@ def panel_loss_samples(
 
         model.update(x, numerator, denominator)
         step_counts[group_key] += 1
+        if progress_callback is not None and (
+            row_index == total_rows or row_index % callback_frequency == 0
+        ):
+            progress_callback(row_index, total_rows)
 
     return PanelLossSamples(
         weights=sample_weights[:n_samples].copy(),

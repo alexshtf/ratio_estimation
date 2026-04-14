@@ -3,10 +3,19 @@ from pathlib import Path
 from typing import cast
 
 import numpy as np
+import pytest
 
+import experiments.benchmark as benchmark_module
 from experiments.baselines import CampaignRunningRatioBaseline
 from experiments.benchmark import (
     BASELINE_MODEL_NAME,
+    BENCHMARK_FLOAT_DISPLAY_WIDTH,
+    _format_evaluation_progress,
+    _format_tune_sec_per_trial,
+    _format_tuning_progress,
+    _progress_table_widths,
+    _ProgressRowState,
+    _should_use_rich_progress,
     _weighted_rec_curve,
     build_benchmark_specs,
     run_benchmark,
@@ -34,6 +43,35 @@ from experiments.tune import (
     tune_spec,
 )
 from ratio_estimation.models import RatioProximalLearner, SoftplusLink
+
+
+class _FakeStream:
+    def __init__(self, is_tty: bool) -> None:
+        self.is_tty = is_tty
+
+    def isatty(self) -> bool:
+        return self.is_tty
+
+
+class _RecordingProgress:
+    def __init__(self, model_names: list[str], enabled: bool = True) -> None:
+        self.enabled = enabled
+        self.rows = {
+            model_name: _ProgressRowState(model=model_name) for model_name in model_names
+        }
+        self.history: list[tuple[str, str, str, str]] = []
+
+    def __enter__(self) -> "_RecordingProgress":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        _ = exc_type, exc, traceback
+
+    def update_row(self, model_name: str, **changes: str) -> None:
+        row = self.rows[model_name]
+        for field_name, value in changes.items():
+            setattr(row, field_name, value)
+        self.history.append((model_name, row.split, row.progress, row.status))
 
 
 def test_generate_dataset_has_expected_columns() -> None:
@@ -142,6 +180,40 @@ def test_weighted_rec_curve_is_monotone_and_ends_at_one() -> None:
     assert np.all(np.diff(curve.cdf) >= 0.0)
 
 
+def test_benchmark_progress_row_defaults() -> None:
+    row = _ProgressRowState(model="quadratic")
+    assert row.split == "pending"
+    assert row.progress == "--"
+    assert row.last_loss == "--"
+    assert row.best_loss == "--"
+    assert row.tune_sec_per_trial == "--"
+    assert row.status == "waiting"
+
+
+def test_benchmark_progress_helpers_format_expected_strings() -> None:
+    assert _format_tuning_progress(3, 10) == "3 / 10"
+    assert _format_evaluation_progress(42, 100) == "42 / 100 (42%)"
+    assert _format_tune_sec_per_trial(0.57, 3) == f"{0.19:>{BENCHMARK_FLOAT_DISPLAY_WIDTH}.2f}"
+    assert len(_format_tune_sec_per_trial(0.57, 3)) == BENCHMARK_FLOAT_DISPLAY_WIDTH
+
+
+def test_benchmark_progress_widths_cover_max_rendered_content() -> None:
+    widths = _progress_table_widths(
+        model_names=["quadratic", BASELINE_MODEL_NAME],
+        n_trials=100,
+        max_rows=20_000,
+    )
+    assert widths.model >= len(BASELINE_MODEL_NAME)
+    assert widths.progress >= len("20000 / 20000 (100%)")
+    assert widths.loss == BENCHMARK_FLOAT_DISPLAY_WIDTH
+    assert widths.tune_sec_per_trial >= len("Tune Sec/Trial")
+
+
+def test_benchmark_progress_auto_enable_uses_tty() -> None:
+    assert _should_use_rich_progress(_FakeStream(is_tty=True))
+    assert not _should_use_rich_progress(_FakeStream(is_tty=False))
+
+
 def test_compare_models_smoke() -> None:
     scores = compare_models(
         groups=6,
@@ -238,6 +310,58 @@ def test_run_benchmark_writes_expected_artifacts(tmp_path: Path) -> None:
     report_html = result.report_path.read_text()
     assert "<svg" in report_html
     assert "campaign_running_ratio" in report_html
+
+
+def test_run_benchmark_reports_progress_transitions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_model_name = build_benchmark_specs(history_length=4)[0].name
+    recorder: _RecordingProgress | None = None
+
+    def build_progress(
+        model_names: list[str],
+        n_trials: int,
+        max_rows: int,
+        enabled: bool | None = None,
+    ) -> _RecordingProgress:
+        del n_trials, max_rows, enabled
+        nonlocal recorder
+        recorder = _RecordingProgress(model_names)
+        return recorder
+
+    monkeypatch.setattr(benchmark_module, "_build_benchmark_progress", build_progress)
+    run_benchmark(
+        n_trials=1,
+        history_length=4,
+        tune_groups=8,
+        test_groups=12,
+        seed=0,
+        output_dir=tmp_path,
+    )
+
+    assert recorder is not None
+    assert any(
+        model_name == first_model_name
+        and split == "tuning"
+        and progress == "1 / 1"
+        and status == "running"
+        for model_name, split, progress, status in recorder.history
+    )
+    assert any(
+        model_name == first_model_name
+        and split == "same"
+        and progress.endswith("(100%)")
+        and status == "evaluating"
+        for model_name, split, progress, status in recorder.history
+    )
+    baseline_row = recorder.rows[BASELINE_MODEL_NAME]
+    assert baseline_row.split == "baseline"
+    assert baseline_row.progress == "done"
+    assert baseline_row.status == "evaluated"
+    assert baseline_row.tune_sec_per_trial == "--"
+    assert baseline_row.last_loss != "--"
+    assert baseline_row.best_loss != "--"
 
 
 def test_run_single_stream_experiment_writes_expected_artifacts(tmp_path: Path) -> None:
