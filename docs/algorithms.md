@@ -86,6 +86,10 @@ The pattern is:
 
 The normalizers match the geometry of the model. For example, the log-ratio normalizer matches the exponential link, and the inverse-softplus normalizer maps a positive ratio back to the latent scale of the softplus model.
 
+In the experiment layer, the maintained panel builders use causal lag windows: the
+feature vector for row `t` is built from previous observations only, never from the
+current row's observed spend or count.
+
 ## Simulation Model
 
 The simulator builds two smooth latent campaign processes from:

@@ -80,6 +80,10 @@ make stream MODELS=quadratic TRIALS=50 HISTORY=5 SEED=0 TAIL_FRACTION=0.9
 The HTML report embeds one three-panel SVG REC figure for the `tune`, `same`, and
 `shifted` splits, and always includes the causal `campaign_running_ratio` baseline.
 
+The experiment dataset builders use causal lag windows: each row's `features` vector
+contains only the previous `history_length` ratio-share observations for that campaign,
+with zero padding at the start of the stream.
+
 `make stream` tunes one or more models on a single synthetic stream, writes the stream,
 per-model traces, final states, and summary files under `artifacts/single_stream/...`, and
 uses the maintained tail-loss sanity objective.

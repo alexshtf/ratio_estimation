@@ -43,7 +43,7 @@ def generate_single_stream(
     rng: np.random.Generator | None = None,
     **stream_kwargs: Any,
 ) -> pd.DataFrame:
-    """Generate one benchmark-style stream with rolling ratio-share features."""
+    """Generate one benchmark-style stream with causal lagged ratio-share features."""
     generator = np.random.default_rng() if rng is None else rng
     frame = sample_ad_group(group_id=0, rng=generator, **stream_kwargs)
     return add_autoregressive_features(frame, history_length=history_length)
@@ -253,7 +253,7 @@ def parse_args() -> argparse.Namespace:
         "--history",
         type=int,
         default=5,
-        help="Rolling feature window size for the single stream.",
+        help="Number of previous ratio-share observations per example.",
     )
     parser.add_argument("--trials", type=int, default=50, help="Optuna trials per model.")
     parser.add_argument("--seed", type=int, default=0, help="Base random seed.")

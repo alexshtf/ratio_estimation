@@ -909,7 +909,12 @@ def parse_args() -> argparse.Namespace:
         description="Tune the maintained benchmark suite and write the REC HTML report."
     )
     parser.add_argument("--trials", type=int, default=100, help="Optuna trials per model.")
-    parser.add_argument("--history", type=int, default=4, help="Rolling feature window size.")
+    parser.add_argument(
+        "--history",
+        type=int,
+        default=4,
+        help="Number of previous ratio-share observations per example.",
+    )
     parser.add_argument("--seed", type=int, default=0, help="Base random seed.")
     parser.add_argument(
         "--tune-groups",

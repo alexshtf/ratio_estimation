@@ -86,7 +86,7 @@ def sample_ad_group(
 
 
 def add_autoregressive_features(frame: pd.DataFrame, history_length: int = 3) -> pd.DataFrame:
-    """Add padded rolling ratio-share features, including the current observation."""
+    """Add padded rolling ratio-share features from previous observations only."""
     if frame.empty:
         result = frame.copy()
         result["features"] = pd.Series(dtype=object)
@@ -95,8 +95,8 @@ def add_autoregressive_features(frame: pd.DataFrame, history_length: int = 3) ->
     spend = frame["spend"].to_numpy(dtype=float)
     count = frame["count"].to_numpy(dtype=float)
     ratio_share = spend / (spend + count)
-    padded_share = np.pad(ratio_share, (history_length - 1, 0))
-    feature_matrix = sliding_window_view(padded_share, history_length).copy()
+    lagged_share = np.pad(ratio_share, (history_length, 0))[:-1]
+    feature_matrix = sliding_window_view(lagged_share, history_length).copy()
 
     result = frame.copy()
     result["features"] = list(feature_matrix)
@@ -109,7 +109,7 @@ def generate_dataset(
     rng: np.random.Generator | None = None,
     **group_kwargs: Any,
 ) -> pd.DataFrame:
-    """Generate a multi-group panel with the maintained benchmark feature semantics."""
+    """Generate a multi-group panel with causal lagged ratio-share experiment features."""
     generator = np.random.default_rng() if rng is None else rng
     frames = [
         add_autoregressive_features(

@@ -21,7 +21,7 @@ from experiments.benchmark import (
     run_benchmark,
 )
 from experiments.compare import compare_models
-from experiments.data import generate_dataset
+from experiments.data import add_autoregressive_features, generate_dataset
 from experiments.evaluate import (
     PanelLossSamples,
     diagnose_stream,
@@ -108,14 +108,30 @@ def test_generate_dataset_matches_benchmark_rolling_feature_semantics() -> None:
     expected_features = np.stack(
         [
             np.pad(
-                share[max(0, index - 2) : index + 1],
-                (max(0, 2 - index), 0),
+                share[max(0, index - 3) : index],
+                (max(0, 3 - index), 0),
             )
             for index in range(len(first_group))
         ]
     )
     for index, expected_feature in enumerate(expected_features):
         np.testing.assert_allclose(first_group.loc[index, "features"], expected_feature)
+
+
+def test_add_autoregressive_features_does_not_leak_the_current_observation() -> None:
+    frame = (
+        generate_dataset(n_groups=1, history_length=2, rng=np.random.default_rng(0))
+        .head(3)
+        .copy()
+    )
+    leaked_variant = frame.copy()
+    leaked_variant.loc[1, ["spend", "count"]] = [1000.0, 1.0]
+
+    original = add_autoregressive_features(frame, history_length=2)
+    updated = add_autoregressive_features(leaked_variant, history_length=2)
+
+    np.testing.assert_allclose(original.loc[1, "features"], updated.loc[1, "features"])
+    assert not np.allclose(original.loc[2, "features"], updated.loc[2, "features"])
 
 
 def test_run_panel_smoke() -> None:
