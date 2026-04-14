@@ -264,7 +264,15 @@ def _format_float_cell(value: float | None, width: int = BENCHMARK_FLOAT_DISPLAY
     """Format one float cell with fixed width and no scientific notation."""
     if value is None or not np.isfinite(value):
         return "--".rjust(width)
-    return f"{value:>{width}.6f}"
+    absolute_value = abs(value)
+    overflow_cell = (("<" if value < 0 else ">") + ("9" * (width - 1))).rjust(width)
+    for decimals in range(6, -1, -1):
+        formatted = f"{value:.{decimals}f}"
+        if len(formatted) <= width:
+            return formatted.rjust(width)
+    if len(str(int(absolute_value))) >= width:
+        return overflow_cell
+    return f"{value:.0f}".rjust(width)[:width]
 
 
 def _format_loss(value: float | None) -> str:

@@ -33,19 +33,15 @@ Items marked `Resolved` have been fixed on the current branch. Unmarked items re
   - The experiment generator now builds bounded latent `spend_mean` and `true_ratio` paths first, defines `count_mean = spend_mean / true_ratio`, and samples observed count and spend from Poisson and negative-binomial observation models.
   - Experiment `true_ratio` values now have a precise meaning as latent ratios of means, and zero-count rows arise from the observation model rather than deterministic flooring.
 
-## 3. Medium-high: decay baselines under-decay across sparse gaps and large jumps
+## 3. Resolved: decay baselines now apply one decay per elapsed interval
 
 - File:
   - `experiments/baselines.py:363-405`
 - Problem:
-  - Intended semantics: decay should happen once per elapsed interval, not merely once per arriving event.
-  - `DecayRatioBaseline.update(...)` applies at most one decay per observation.
-  - In COST and COUNT modes, once the accumulator crosses the threshold, the code decays once and resets the tracked interval to zero, even if several threshold buckets were crossed inside that one update.
-  - In TIME mode, if a large time gap crosses several intervals with no events in between, the next event still triggers only one decay.
+  - The original baseline applied at most one decay per observation, even when several cost/count buckets or time intervals had elapsed.
 - Impact:
-  - The implemented dynamics are weaker than the intended "once per interval" decay process.
-  - Sparse events retain stale history too strongly because missed hourly or interval decays are never applied.
-  - Large COST or COUNT jumps also retain too much history because only one decay is applied no matter how many buckets were crossed.
+  - `DecayRatioBaseline` now applies one multiplicative decay per fully elapsed interval, keeps the leftover remainder for COST and COUNT modes, and applies elapsed TIME decays before incorporating the new observation.
+  - Direct regression tests now cover both large COST jumps and sparse TIME gaps.
 
 ## 4. Resolved: `LinearInverseRatioLearner` now keeps predictions finite and positive
 
@@ -75,46 +71,39 @@ Items marked `Resolved` have been fixed on the current branch. Unmarked items re
   - The public API now exposes `smoothed_inverse_softplus_normalizer` as the primary name and uses it as the default in `AutoregressiveRatioFeatures`.
   - The legacy `inverse_softplus_normalizer` name remains as a backward-compatible alias, and the docs now describe the smoothing explicitly.
 
-## 6. Medium: zero/zero observations are scored with an arbitrary large penalty
+## 6. Resolved: zero/zero observations are treated as undefined and excluded from metrics
 
 - Files:
   - `experiments/evaluate.py:79-84`
   - `experiments/evaluate.py:106`
   - `src/ratio_estimation/simulation.py:113-119`
 - Problem:
-  - `log_ratio_error(...)` uses `nextafter` on both numerator and denominator.
-  - For `(numerator, denominator) = (0, 0)`, the observed ratio is effectively treated as `1`.
-  - Unless the prediction is also exactly `1`, the loss is very large.
+  - The original metric treated `(numerator, denominator) = (0, 0)` as a finite ratio by nudging both sides with `nextafter`.
 - Impact:
-  - Undefined-ratio rows are not handled explicitly.
-  - The benchmark metric can be influenced by these arbitrary conventions.
+  - `log_ratio_error(...)` now returns `NaN` for zero/zero rows, rollout traces mark their `actual_ratio` as missing, and tail/panel summaries skip those undefined rows instead of assigning an arbitrary penalty.
 
-## 7. Medium-low: weighted standard error becomes `nan` for a single retained sample
+## 7. Resolved: single-sample weighted stderr now returns zero
 
 - File:
   - `experiments/evaluate.py:162-179`
 - Problem:
-  - `weighted_mean_and_stderr(...)` divides by `n_samples - 1`.
-  - `summarize_panel_losses(...)` guards the empty case, but not the single-sample case.
+  - The original `weighted_mean_and_stderr(...)` divided by `n_samples - 1` even when only one retained sample remained.
 - Impact:
-  - Tiny panels or large warmup settings can produce `(mean, nan)` plus a runtime warning.
-  - This can propagate into trial metadata and benchmark summaries.
+  - One retained sample now returns `(mean, 0.0)`, avoiding runtime warnings and keeping tiny benchmark summaries well-defined.
 
-## 8. Low: the progress-table float formatter is not truly fixed-width
+## 8. Resolved: the progress-table float formatter now stays fixed-width
 
 - File:
   - `experiments/benchmark.py:262-292`
 - Problem:
-  - `f"{value:>{width}.6f}"` uses `width` as a minimum width, not a hard cap.
-  - Values with four or more integer digits exceed the intended 10-character width.
+  - The original benchmark formatter used minimum-width float formatting, so large values could still widen the table.
 - Impact:
-  - The live benchmark table can still resize despite the fixed-width intent.
+  - The formatter now reduces decimal precision as needed and falls back to a fixed-width overflow sentinel for very large magnitudes, so the live table no longer resizes on numeric growth.
 
 ## Coverage Gaps
 
 - Missing direct tests for:
-  - `DecayRatioBaseline`
-  - single-sample behavior in `weighted_mean_and_stderr(...)`
+  - none identified in the previously open audited areas
 
 ## Check Status At Audit Time
 

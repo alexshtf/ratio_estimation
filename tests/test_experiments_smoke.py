@@ -8,11 +8,12 @@ import pytest
 
 import experiments.benchmark as benchmark_module
 import experiments.data as data_module
-from experiments.baselines import CampaignRunningRatioBaseline
+from experiments.baselines import CampaignRunningRatioBaseline, DecayMode, DecayRatioBaseline
 from experiments.benchmark import (
     BASELINE_MODEL_NAME,
     BENCHMARK_FLOAT_DISPLAY_WIDTH,
     _format_evaluation_progress,
+    _format_float_cell,
     _format_tune_sec_per_trial,
     _format_tuning_progress,
     _progress_table_widths,
@@ -39,6 +40,7 @@ from experiments.evaluate import (
     run_panel,
     score_stream_tail,
     summarize_panel_losses,
+    weighted_mean_and_stderr,
 )
 from experiments.plot_groups import _observed_ratio_series, run_plot_groups
 from experiments.single_stream import (
@@ -176,12 +178,17 @@ def test_log_ratio_error_clips_nonpositive_predictions() -> None:
     assert np.isfinite(log_ratio_error(prediction=-1.0, numerator=2.0, denominator=1.0))
 
 
+def test_log_ratio_error_marks_zero_zero_rows_as_missing() -> None:
+    assert np.isnan(log_ratio_error(prediction=1.0, numerator=0.0, denominator=0.0))
+
+
 def test_generate_dataset_matches_benchmark_rolling_feature_semantics() -> None:
     dataset = generate_dataset(n_groups=1, history_length=3, rng=np.random.default_rng(0))
     first_group = dataset[dataset["id"] == 0].reset_index(drop=True)
     spend = np.asarray(first_group["spend"], dtype=float)
     count = np.asarray(first_group["count"], dtype=float)
-    share = spend / (spend + count)
+    total = spend + count
+    share = np.divide(spend, total, out=np.zeros_like(spend), where=total > 0.0)
     expected_features = np.stack(
         [
             np.pad(
@@ -251,6 +258,12 @@ def test_panel_loss_samples_match_run_panel_summary() -> None:
     np.testing.assert_allclose(sample_stderr, stderr)
 
 
+def test_weighted_mean_and_stderr_returns_zero_stderr_for_one_sample() -> None:
+    mean_loss, stderr = weighted_mean_and_stderr(np.array([2.0]), np.array([3.5]))
+    assert mean_loss == 3.5
+    assert stderr == 0.0
+
+
 def test_campaign_running_ratio_baseline_uses_cumulative_history() -> None:
     baseline = CampaignRunningRatioBaseline()
     assert baseline.predict() == 1.0
@@ -258,6 +271,26 @@ def test_campaign_running_ratio_baseline_uses_cumulative_history() -> None:
     assert baseline.predict() == 5.0
     baseline.update(x=0.0, numerator=6.0, denominator=3.0)
     np.testing.assert_allclose(baseline.predict(), 16.0 / 5.0)
+
+
+def test_decay_ratio_baseline_applies_multiple_cost_decays_with_remainder() -> None:
+    baseline = DecayRatioBaseline(decay_rate=0.5, decay_interval=10.0, mode=DecayMode.COST)
+    baseline.update(x=0.0, numerator=5.0, denominator=2.0)
+    baseline.update(x=0.0, numerator=27.0, denominator=3.0)
+    np.testing.assert_allclose(baseline.numerator, 4.0)
+    np.testing.assert_allclose(baseline.denominator, 0.625)
+    assert baseline.current_interval is not None
+    np.testing.assert_allclose(baseline.current_interval, 2.0)
+
+
+def test_decay_ratio_baseline_applies_multiple_time_gap_decays_before_update() -> None:
+    baseline = DecayRatioBaseline(decay_rate=0.5, decay_interval=10.0, mode=DecayMode.TIME)
+    baseline.update(x=np.array([0.0]), numerator=10.0, denominator=2.0)
+    baseline.update(x=np.array([25.0]), numerator=6.0, denominator=3.0)
+    np.testing.assert_allclose(baseline.numerator, 8.5)
+    np.testing.assert_allclose(baseline.denominator, 3.5)
+    assert baseline.current_interval is not None
+    np.testing.assert_allclose(baseline.current_interval, 20.0)
 
 
 def test_weighted_rec_curve_is_monotone_and_ends_at_one() -> None:
@@ -288,6 +321,8 @@ def test_benchmark_progress_helpers_format_expected_strings() -> None:
     assert _format_evaluation_progress(42, 100) == "42 / 100 (42%)"
     assert _format_tune_sec_per_trial(0.57, 3) == f"{0.19:>{BENCHMARK_FLOAT_DISPLAY_WIDTH}.2f}"
     assert len(_format_tune_sec_per_trial(0.57, 3)) == BENCHMARK_FLOAT_DISPLAY_WIDTH
+    assert len(_format_float_cell(12345678901.0)) == BENCHMARK_FLOAT_DISPLAY_WIDTH
+    assert _format_float_cell(12345678901.0) == ">999999999"
 
 
 def test_benchmark_progress_widths_cover_max_rendered_content() -> None:
@@ -348,6 +383,21 @@ def test_diagnose_stream_returns_trace_and_state() -> None:
     } <= set(diagnostics.trace.columns)
     assert "weights" in diagnostics.final_state
     assert np.isfinite(diagnostics.tail_mean_log_error())
+
+
+def test_diagnose_stream_marks_zero_zero_actual_ratio_as_missing() -> None:
+    frame = pd.DataFrame(
+        {
+            "features": [np.zeros(2), np.ones(2)],
+            "spend": [0.0, 2.0],
+            "count": [0.0, 1.0],
+            "true_ratio": [np.nan, 2.0],
+        }
+    )
+    learner = RatioProximalLearner(link=SoftplusLink(), step_size=0.1, regularization=1.0)
+    diagnostics = diagnose_stream(frame, learner)
+    assert np.isnan(diagnostics.trace.loc[0, "actual_ratio"])
+    assert np.isnan(diagnostics.trace.loc[0, "log_error"])
 
 
 def test_score_stream_tail_matches_trace_tail_loss() -> None:

@@ -78,11 +78,27 @@ def _stream_arrays(frame: pd.DataFrame, input_column: str) -> _StreamArrays:
 
 def log_ratio_error(prediction: float, numerator: float, denominator: float) -> float:
     """Compute the absolute log-ratio error against the observed ratio."""
+    if numerator == 0.0 and denominator == 0.0:
+        return float("nan")
     min_positive = float(np.nextafter(0.0, np.inf))
     safe_prediction = max(float(prediction), min_positive)
     safe_numerator = max(float(numerator), min_positive)
     safe_denominator = max(float(denominator), min_positive)
     return float(abs(np.log(safe_prediction) - np.log(safe_numerator) + np.log(safe_denominator)))
+
+
+def _observed_ratio_array(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
+    """Return observed ratios, marking zero/zero rows as undefined."""
+    min_positive = float(np.nextafter(0.0, np.inf))
+    safe_numerator = np.maximum(np.asarray(numerator, dtype=float), min_positive)
+    safe_denominator = np.maximum(np.asarray(denominator, dtype=float), min_positive)
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        observed_ratio = safe_numerator / safe_denominator
+    undefined_mask = (np.asarray(numerator, dtype=float) == 0.0) & (
+        np.asarray(denominator, dtype=float) == 0.0
+    )
+    observed_ratio[undefined_mask] = np.nan
+    return observed_ratio
 
 
 def rollout_stream(
@@ -104,8 +120,7 @@ def diagnose_stream(
     n_rows = len(stream.spend)
     predictions = np.empty(n_rows, dtype=float)
     log_errors = np.empty(n_rows, dtype=float)
-    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
-        actual_ratio = np.nextafter(stream.spend, np.inf) / np.nextafter(stream.count, np.inf)
+    actual_ratio = _observed_ratio_array(stream.spend, stream.count)
 
     for index, (x, numerator, denominator) in enumerate(
         zip(stream.inputs, stream.spend, stream.count, strict=True)
@@ -143,28 +158,40 @@ def score_stream_tail(
     tail_length = max(1, int(np.ceil(n_rows * tail_fraction)))
     tail_start = n_rows - tail_length
     tail_error_sum = 0.0
+    finite_tail_errors = 0
 
     for index, (x, numerator, denominator) in enumerate(
         zip(stream.inputs, stream.spend, stream.count, strict=True)
     ):
         prediction = float(model.predict(x))
         if index >= tail_start:
-            tail_error_sum += log_ratio_error(prediction, numerator, denominator)
+            loss = log_ratio_error(prediction, numerator, denominator)
+            if np.isfinite(loss):
+                tail_error_sum += loss
+                finite_tail_errors += 1
         model.update(x, numerator, denominator)
 
-    return float(tail_error_sum / tail_length)
+    if finite_tail_errors == 0:
+        return float("nan")
+    return float(tail_error_sum / finite_tail_errors)
 
 
 def tail_mean_log_error(trace: pd.DataFrame, tail_fraction: float = 0.5) -> float:
     """Return the mean log error over the final tail of a rollout trace."""
     tail_length = max(1, int(np.ceil(len(trace) * tail_fraction)))
-    return float(trace["log_error"].tail(tail_length).mean())
+    tail_errors = trace["log_error"].tail(tail_length).to_numpy(dtype=float, copy=False)
+    finite_errors = tail_errors[np.isfinite(tail_errors)]
+    if len(finite_errors) == 0:
+        return float("nan")
+    return float(np.mean(finite_errors))
 
 
 def weighted_mean_and_stderr(weights: np.ndarray, values: np.ndarray) -> tuple[float, float]:
     """Return a weighted mean and the Gatz-Smith standard error estimate."""
     mean_value = float(np.average(values, weights=weights))
     n_samples = len(values)
+    if n_samples <= 1:
+        return mean_value, 0.0
     mean_weight = float(np.mean(weights))
     stderr_squared = (
         n_samples
@@ -211,7 +238,7 @@ def panel_loss_samples(
         prediction = float(model.predict(x))
         loss = log_ratio_error(prediction, numerator, denominator)
 
-        if step_counts[group_key] >= warmup_steps:
+        if step_counts[group_key] >= warmup_steps and np.isfinite(loss):
             sample_weights[n_samples] = numerator
             sample_losses[n_samples] = loss
             n_samples += 1

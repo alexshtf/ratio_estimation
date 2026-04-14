@@ -374,35 +374,50 @@ class DecayRatioBaseline:
     def update(self, x: ArrayLike, numerator: float, denominator: float) -> None:
         """Accumulate one observation and decay when the interval is crossed."""
         time = float(np.asarray(x, dtype=float).reshape(-1)[0])
-        self.numerator += numerator
-        self.denominator += denominator
 
         if self.mode is DecayMode.COST:
             self.current_interval = 0.0 if self.current_interval is None else self.current_interval
             self.current_interval += numerator
-            if self.current_interval >= self.decay_interval:
-                self._decay()
-                self.current_interval = 0.0
+            self.numerator += numerator
+            self.denominator += denominator
+            self._apply_interval_decays()
         elif self.mode is DecayMode.COUNT:
             self.current_interval = 0.0 if self.current_interval is None else self.current_interval
             self.current_interval += denominator
-            if self.current_interval >= self.decay_interval:
-                self._decay()
-                self.current_interval = 0.0
+            self.numerator += numerator
+            self.denominator += denominator
+            self._apply_interval_decays()
         else:
-            self.current_interval = time if self.current_interval is None else self.current_interval
-            if time - self.current_interval >= self.decay_interval:
-                self._decay()
+            if self.current_interval is None:
                 self.current_interval = time
+            else:
+                elapsed_time = time - self.current_interval
+                decay_steps = int(elapsed_time // self.decay_interval)
+                if decay_steps > 0:
+                    self._decay(decay_steps)
+                    self.current_interval += decay_steps * self.decay_interval
+            self.numerator += numerator
+            self.denominator += denominator
 
     def predict(self, x: ArrayLike | None = None) -> float:
         """Return the current decayed ratio estimate."""
         _ = x
         return 0.0 if self.denominator == 0 else float(self.numerator / self.denominator)
 
-    def _decay(self) -> None:
-        self.numerator *= self.decay_rate
-        self.denominator *= self.decay_rate
+    def _apply_interval_decays(self) -> None:
+        """Apply one decay per fully elapsed accumulated interval."""
+        assert self.current_interval is not None
+        decay_steps = int(self.current_interval // self.decay_interval)
+        if decay_steps <= 0:
+            return
+        self._decay(decay_steps)
+        self.current_interval -= decay_steps * self.decay_interval
+
+    def _decay(self, steps: int = 1) -> None:
+        """Decay the running numerator and denominator by several intervals."""
+        decay_scale = self.decay_rate**steps
+        self.numerator *= decay_scale
+        self.denominator *= decay_scale
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current baseline state."""
