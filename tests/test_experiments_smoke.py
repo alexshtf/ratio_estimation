@@ -13,6 +13,7 @@ from experiments.baselines import (
     CampaignRunningRatioBaseline,
     DecayMode,
     DecayRatioBaseline,
+    ExponentialRatioBaseline,
     RatioOfRegressorsBaseline,
 )
 from experiments.benchmark import (
@@ -170,6 +171,7 @@ def test_shared_registry_preserves_benchmark_and_single_stream_membership() -> N
     benchmark_names = [spec.name for spec in build_benchmark_specs(history_length=4)]
     single_stream_names = list(build_single_stream_specs(history_length=4))
     assert benchmark_names == single_stream_names[:-1]
+    assert "inverse_exponential" in benchmark_names
     assert single_stream_names[-1] == "exponential_quadratic"
 
 
@@ -310,6 +312,53 @@ def test_ratio_of_regressors_baseline_uses_lazy_cold_start() -> None:
     state = baseline.state_dict()
     np.testing.assert_allclose(cast(list[float], state["numerator_coef"]), np.zeros(3))
     np.testing.assert_allclose(cast(list[float], state["denominator_coef"]), np.zeros(3))
+
+
+def test_exponential_ratio_baseline_cold_starts_at_one_in_both_modes() -> None:
+    features = np.array([1.0, -2.0, 0.5])
+    direct = ExponentialRatioBaseline(dimension=3, step_size=0.1, regularization=1.0)
+    inverse = ExponentialRatioBaseline(
+        dimension=3,
+        step_size=0.1,
+        regularization=1.0,
+        inverse=True,
+    )
+
+    assert direct.predict(features) == pytest.approx(1.0)
+    assert inverse.predict(features) == pytest.approx(1.0)
+
+
+def test_exponential_ratio_baseline_inverse_mode_returns_reciprocal_prediction() -> None:
+    features = np.zeros(2)
+    direct = ExponentialRatioBaseline(dimension=2, step_size=0.1, regularization=1.0)
+    inverse = ExponentialRatioBaseline(
+        dimension=2,
+        step_size=0.1,
+        regularization=1.0,
+        inverse=True,
+    )
+    direct.bias = float(np.log(2.0))
+    inverse.bias = float(np.log(2.0))
+
+    assert direct.predict(features) == pytest.approx(2.0)
+    assert inverse.predict(features) == pytest.approx(0.5)
+
+
+def test_exponential_ratio_baseline_inverse_mode_runs_on_a_stream() -> None:
+    dataset = generate_dataset(n_groups=1, history_length=4, rng=np.random.default_rng(0))
+    diagnostics = diagnose_stream(
+        dataset,
+        ExponentialRatioBaseline(
+            dimension=4,
+            step_size=0.1,
+            regularization=1.0,
+            inverse=True,
+        ),
+    )
+    predictions = diagnostics.trace["prediction"].to_numpy(dtype=float)
+    assert np.all(np.isfinite(predictions))
+    assert np.all(predictions > 0.0)
+    assert diagnostics.final_state["inverse"] is True
 
 
 def test_weighted_mean_and_stderr_returns_zero_stderr_for_one_sample() -> None:
@@ -492,7 +541,7 @@ def test_run_benchmark_writes_expected_artifacts(tmp_path: Path) -> None:
         "shifted_stderr",
     } <= set(result.summary.columns)
     assert BASELINE_MODEL_NAME in set(result.summary["model"])
-    assert len(result.summary) == 9
+    assert len(result.summary) == 10
     assert (result.output_dir / "summary.csv").exists()
     assert (result.output_dir / "summary.json").exists()
     assert (result.output_dir / "best_params.json").exists()
@@ -507,6 +556,8 @@ def test_run_benchmark_writes_expected_artifacts(tmp_path: Path) -> None:
     report_html = result.report_path.read_text()
     assert "<svg" in report_html
     assert "campaign_running_ratio" in report_html
+    assert "REC Zoom" in report_html
+    assert "zoomed to [0, 10]" in report_html
 
 
 def test_run_benchmark_reports_progress_transitions(

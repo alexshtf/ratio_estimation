@@ -45,6 +45,7 @@ BuildModel = Callable[[Params], StreamingModelLike]
 
 BENCHMARK_MODEL_NAMES = (
     "exponential",
+    "inverse_exponential",
     "ratio_of_regressors",
     "quadratic",
     "linear",
@@ -156,6 +157,17 @@ def build_model_registry(history_length: int) -> dict[str, ExperimentModelSpec]:
                 dimension=dimension,
                 step_size=params["step_size"],
                 regularization=params["regularization"],
+                inverse=False,
+            ),
+        ),
+        _step_regularized_spec(
+            "inverse_exponential",
+            history_length,
+            lambda dimension, params: ExponentialRatioBaseline(
+                dimension=dimension,
+                step_size=params["step_size"],
+                regularization=params["regularization"],
+                inverse=True,
             ),
         ),
         ExperimentModelSpec(

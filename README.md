@@ -62,6 +62,10 @@ The canonical benchmark workflow is:
 uv run python -m experiments.benchmark
 ```
 
+The maintained benchmark suite includes the direct `exponential` model together
+with its inverse-twin `inverse_exponential`, which fits `count / spend`
+internally and returns `spend / count` by inverting that internal prediction.
+
 The cheap single-stream sanity-check workflow is:
 
 ```bash
@@ -82,8 +86,9 @@ make plot-groups PLOT_GROUPS=6 SEED=0
 `summary.json`, `best_params.json`, `metadata.json`, and `report.html` under
 `artifacts/benchmarks/...`.
 
-The HTML report embeds one three-panel SVG REC figure for the `tune`, `same`, and
-`shifted` splits, and always includes the causal `campaign_running_ratio` baseline.
+The HTML report embeds one two-row six-panel SVG REC figure for the `tune`, `same`, and
+`shifted` splits, with an overview row and a zoomed row over the x-range `[0, 10]`,
+and always includes the causal `campaign_running_ratio` baseline.
 
 The experiment dataset builders use causal lag windows: each row's `features` vector
 contains only the previous `history_length` ratio-share observations for that campaign,
@@ -96,7 +101,8 @@ to that latent ratio of means, not the realized row-wise `spend / count`.
 
 `make stream` tunes one or more models on a single synthetic stream, writes the stream,
 per-model traces, final states, and summary files under `artifacts/single_stream/...`, and
-uses the maintained tail-loss sanity objective.
+uses the maintained tail-loss sanity objective. The maintained single-stream
+registry includes both `exponential` and `inverse_exponential`.
 
 `make plot-groups` writes a plain HTML report under `artifacts/plot_groups/...` with
 several generated campaigns, showing each campaign's spend, count, true ratio, and
