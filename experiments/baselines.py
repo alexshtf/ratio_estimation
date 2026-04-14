@@ -2,6 +2,7 @@
 
 import sys
 from enum import Enum
+from typing import cast
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -26,6 +27,7 @@ class RatioOfRegressorsBaseline:
         denominator_regularization: float,
         epsilon: float = 1e-10,
     ) -> None:
+        self.dimension = dimension
         self.numerator_regressor = SGDRegressor(
             loss="squared_error",
             alpha=numerator_regularization,
@@ -38,32 +40,93 @@ class RatioOfRegressorsBaseline:
             learning_rate="constant",
             eta0=denominator_step_size,
         )
-        seed_features = np.zeros((1, dimension), dtype=float)
-        self.numerator_regressor.partial_fit(seed_features, [0.0])
-        self.denominator_regressor.partial_fit(seed_features, [0.0])
         self.epsilon = epsilon
+        self.is_fitted = False
 
     def update(self, x: ArrayLike, numerator: float, denominator: float) -> None:
         """Fit one streaming observation."""
         features = np.asarray(x, dtype=float).reshape(1, -1)
-        self.numerator_regressor.partial_fit(features, [np.log(self.epsilon + numerator)])
-        self.denominator_regressor.partial_fit(features, [np.log(self.epsilon + denominator)])
+        log_numerator = np.array([np.log(self.epsilon + numerator)], dtype=float)
+        log_denominator = np.array([np.log(self.epsilon + denominator)], dtype=float)
+        self.numerator_regressor.partial_fit(features, log_numerator)
+        self.denominator_regressor.partial_fit(features, log_denominator)
+        self.is_fitted = True
 
     def predict(self, x: ArrayLike) -> float:
         """Predict the ratio from separate log-scale regressors."""
-        features = np.asarray(x, dtype=float).reshape(1, -1)
-        log_numerator = float(self.numerator_regressor.predict(features)[0])
-        log_denominator = float(self.denominator_regressor.predict(features)[0])
+        if not self.is_fitted:
+            return 1.0
+
+        features = np.asarray(x, dtype=float).reshape(-1)
+        log_numerator = self._linear_predict(self.numerator_regressor, features)
+        log_denominator = self._linear_predict(self.denominator_regressor, features)
         return float(np.exp(min(log_numerator - log_denominator, MAX_LOG_FLOAT)))
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current baseline state."""
+        numerator_coef = (
+            self.numerator_regressor.coef_
+            if self.is_fitted
+            else np.zeros(self.dimension, dtype=float)
+        )
+        numerator_intercept = (
+            self.numerator_regressor.intercept_
+            if self.is_fitted
+            else np.zeros(1, dtype=float)
+        )
+        denominator_coef = (
+            self.denominator_regressor.coef_
+            if self.is_fitted
+            else np.zeros(self.dimension, dtype=float)
+        )
+        denominator_intercept = (
+            self.denominator_regressor.intercept_
+            if self.is_fitted
+            else np.zeros(1, dtype=float)
+        )
         return state_snapshot(
             epsilon=self.epsilon,
-            numerator_coef=self.numerator_regressor.coef_,
-            numerator_intercept=self.numerator_regressor.intercept_,
-            denominator_coef=self.denominator_regressor.coef_,
-            denominator_intercept=self.denominator_regressor.intercept_,
+            numerator_coef=numerator_coef,
+            numerator_intercept=numerator_intercept,
+            denominator_coef=denominator_coef,
+            denominator_intercept=denominator_intercept,
+        )
+
+    @staticmethod
+    def _linear_predict(regressor: SGDRegressor, features: np.ndarray) -> float:
+        """Return the raw linear score without sklearn's prediction wrapper."""
+        coefficients = cast(np.ndarray, regressor.coef_)
+        intercept = cast(np.ndarray, regressor.intercept_)
+        return float(np.dot(coefficients, features) + intercept[0])
+
+
+class CampaignRunningRatioBaseline:
+    """Predict each campaign's cumulative observed ratio before the current update."""
+
+    def __init__(self, default_prediction: float = 1.0) -> None:
+        self.default_prediction = default_prediction
+        self.cumulative_numerator = 0.0
+        self.cumulative_denominator = 0.0
+
+    def update(self, x: ArrayLike, numerator: float, denominator: float) -> None:
+        """Accumulate one streaming observation."""
+        _ = x
+        self.cumulative_numerator += numerator
+        self.cumulative_denominator += denominator
+
+    def predict(self, x: ArrayLike | None = None) -> float:
+        """Return the cumulative ratio observed before the current update."""
+        _ = x
+        if self.cumulative_denominator <= 0.0:
+            return self.default_prediction
+        return float(self.cumulative_numerator / self.cumulative_denominator)
+
+    def state_dict(self) -> dict[str, object]:
+        """Return a lightweight snapshot of the current baseline state."""
+        return state_snapshot(
+            default_prediction=self.default_prediction,
+            cumulative_numerator=self.cumulative_numerator,
+            cumulative_denominator=self.cumulative_denominator,
         )
 
 
@@ -344,35 +407,50 @@ class DecayRatioBaseline:
     def update(self, x: ArrayLike, numerator: float, denominator: float) -> None:
         """Accumulate one observation and decay when the interval is crossed."""
         time = float(np.asarray(x, dtype=float).reshape(-1)[0])
-        self.numerator += numerator
-        self.denominator += denominator
 
         if self.mode is DecayMode.COST:
             self.current_interval = 0.0 if self.current_interval is None else self.current_interval
             self.current_interval += numerator
-            if self.current_interval >= self.decay_interval:
-                self._decay()
-                self.current_interval = 0.0
+            self.numerator += numerator
+            self.denominator += denominator
+            self._apply_interval_decays()
         elif self.mode is DecayMode.COUNT:
             self.current_interval = 0.0 if self.current_interval is None else self.current_interval
             self.current_interval += denominator
-            if self.current_interval >= self.decay_interval:
-                self._decay()
-                self.current_interval = 0.0
+            self.numerator += numerator
+            self.denominator += denominator
+            self._apply_interval_decays()
         else:
-            self.current_interval = time if self.current_interval is None else self.current_interval
-            if time - self.current_interval >= self.decay_interval:
-                self._decay()
+            if self.current_interval is None:
                 self.current_interval = time
+            else:
+                elapsed_time = time - self.current_interval
+                decay_steps = int(elapsed_time // self.decay_interval)
+                if decay_steps > 0:
+                    self._decay(decay_steps)
+                    self.current_interval += decay_steps * self.decay_interval
+            self.numerator += numerator
+            self.denominator += denominator
 
     def predict(self, x: ArrayLike | None = None) -> float:
         """Return the current decayed ratio estimate."""
         _ = x
         return 0.0 if self.denominator == 0 else float(self.numerator / self.denominator)
 
-    def _decay(self) -> None:
-        self.numerator *= self.decay_rate
-        self.denominator *= self.decay_rate
+    def _apply_interval_decays(self) -> None:
+        """Apply one decay per fully elapsed accumulated interval."""
+        assert self.current_interval is not None
+        decay_steps = int(self.current_interval // self.decay_interval)
+        if decay_steps <= 0:
+            return
+        self._decay(decay_steps)
+        self.current_interval -= decay_steps * self.decay_interval
+
+    def _decay(self, steps: int = 1) -> None:
+        """Decay the running numerator and denominator by several intervals."""
+        decay_scale = self.decay_rate**steps
+        self.numerator *= decay_scale
+        self.denominator *= decay_scale
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current baseline state."""

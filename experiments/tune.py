@@ -95,7 +95,7 @@ def parse_args() -> argparse.Namespace:
         "--history",
         type=int,
         default=6,
-        help="Number of lagged ratio features per example.",
+        help="Number of previous ratio-share observations per example.",
     )
     parser.add_argument("--trials", type=int, default=5, help="Number of Optuna trials to run.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for dataset generation.")

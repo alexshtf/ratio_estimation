@@ -20,6 +20,7 @@ This repo is a research codebase for online ratio estimation on synthetic campai
 - Do not add defensive boilerplate unless it makes the math easier to follow.
 - Keep the public package small and coherent.
 - Do not put reusable logic in notebooks.
+- Prefer elegance, coherence, consistency, efficiency and conciseness over small diffs.
 
 ## Workflow
 

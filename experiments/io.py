@@ -32,6 +32,16 @@ def timestamped_output_dir(root: str | Path, prefix: str) -> Path:
     return Path(root) / f"{prefix}-{timestamp}"
 
 
+def strip_svg_preamble(svg_markup: str) -> str:
+    """Remove XML and DOCTYPE headers so SVG can be embedded directly into HTML."""
+    lines = [
+        line
+        for line in svg_markup.splitlines()
+        if not line.startswith("<?xml") and not line.startswith("<!DOCTYPE")
+    ]
+    return "\n".join(lines)
+
+
 def write_json_artifact(path: Path, value: Any) -> None:
     """Write one JSON artifact with the repo-standard formatting."""
     path.parent.mkdir(parents=True, exist_ok=True)

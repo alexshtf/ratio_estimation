@@ -5,7 +5,9 @@ from ratio_estimation.features import (
     BiasFeature,
     FeatureStack,
     RollingMeanWindow,
+    inverse_softplus_normalizer,
     share_normalizer,
+    smoothed_inverse_softplus_normalizer,
 )
 
 
@@ -38,3 +40,13 @@ def test_feature_stack_concatenates_blocks() -> None:
     )
     stacked.update(2.0, 2.0)
     assert stacked.features().shape == (5,)
+
+
+def test_smoothed_inverse_softplus_normalizer_matches_legacy_alias() -> None:
+    value = smoothed_inverse_softplus_normalizer(10.0, 2.0)
+    np.testing.assert_allclose(value, inverse_softplus_normalizer(10.0, 2.0))
+
+
+def test_autoregressive_features_default_to_smoothed_inverse_softplus_normalizer() -> None:
+    features = AutoregressiveRatioFeatures(history_length=2)
+    assert features.normalizer is smoothed_inverse_softplus_normalizer

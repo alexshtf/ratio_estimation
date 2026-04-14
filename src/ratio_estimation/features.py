@@ -51,11 +51,16 @@ def log_ratio_normalizer(numerator: float, denominator: float) -> float:
     return float(value) if np.isfinite(value) else np.nan
 
 
-def inverse_softplus_normalizer(numerator: float, denominator: float) -> float:
-    """Map a positive ratio through the inverse of softplus."""
+def smoothed_inverse_softplus_normalizer(numerator: float, denominator: float) -> float:
+    """Map a smoothed positive ratio through an inverse-softplus-style transform."""
     ratio = (1.0 + numerator) / (1.0 + denominator)
     value = np.log(np.expm1(ratio))
     return float(value) if np.isfinite(value) else np.nan
+
+
+def inverse_softplus_normalizer(numerator: float, denominator: float) -> float:
+    """Backward-compatible alias for the smoothed inverse-softplus normalizer."""
+    return smoothed_inverse_softplus_normalizer(numerator, denominator)
 
 
 @dataclass(slots=True)
@@ -97,7 +102,7 @@ class AutoregressiveRatioFeatures:
 
     history_length: int = 24
     window: RollingMeanWindow = field(default_factory=RollingMeanWindow)
-    normalizer: RatioNormalizer = inverse_softplus_normalizer
+    normalizer: RatioNormalizer = smoothed_inverse_softplus_normalizer
     ratio_history: FloatArray = field(init=False, repr=False)
     missing_history: FloatArray = field(init=False, repr=False)
 

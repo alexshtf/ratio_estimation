@@ -84,7 +84,24 @@ The pattern is:
 2. map the local ratio onto a latent scale with a normalizer
 3. keep a history of those normalized values as the feature vector
 
-The normalizers match the geometry of the model. For example, the log-ratio normalizer matches the exponential link, and the inverse-softplus normalizer maps a positive ratio back to the latent scale of the softplus model.
+The normalizers match the geometry of the model. For example, the log-ratio normalizer matches the exponential link. The maintained default is a smoothed inverse-softplus normalizer:
+
+```text
+log(expm1((1 + numerator) / (1 + denominator)))
+```
+
+That smoothing keeps the transform finite when the raw ratio would be singular or undefined. The legacy `inverse_softplus_normalizer` name remains as a backward-compatible alias for this smoothed transform.
+
+In the experiment layer, the maintained panel builders use causal lag windows: the
+feature vector for row `t` is built from previous observations only, never from the
+current row's observed spend or count.
+
+The experiment-layer synthetic panels use a simpler bounded periodic generator than the
+stable library simulator, but they follow the same observation pattern: bounded latent
+spend means and bounded latent true-ratio paths are sampled first, then observed count
+is drawn from a Poisson model and observed spend from an overdispersed negative-binomial
+model. In those experiment frames, `true_ratio` is the latent ratio of means rather than
+the realized row-wise `spend / count`.
 
 ## Simulation Model
 
@@ -127,6 +144,11 @@ The experiment layer includes simpler comparison models:
 - simple decay-based estimators
 
 These are useful comparison points, but the core library is organized around the direct ratio loss and its proximal updates.
+
+The maintained benchmark report keeps the weighted mean log-error summary table and adds
+weighted REC curves for the `tune`, `same`, and `shifted` splits. Those REC curves also
+include the online `campaign_running_ratio` baseline, which predicts each campaign's
+cumulative observed spend-to-count ratio before the current update.
 
 ## Further Reading In Code
 

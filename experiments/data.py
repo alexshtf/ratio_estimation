@@ -1,10 +1,23 @@
 """Dataset builders used by the experiment notebooks and tuning scripts."""
 
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
+
+from ratio_estimation.simulation import sample_negative_binomial, sample_poisson
+
+
+@dataclass(slots=True)
+class _LatentAdGroupPaths:
+    """Latent bounded paths used to generate one synthetic ad group."""
+
+    offset_series: np.ndarray
+    spend_mean: np.ndarray
+    count_mean: np.ndarray
+    true_ratio: np.ndarray
 
 
 def bounded_periodic_series(
@@ -16,7 +29,7 @@ def bounded_periodic_series(
     noise_scale: float = 0.05,
     rng: np.random.Generator | None = None,
 ) -> np.ndarray:
-    """Sample a smooth positive series bounded between two random scales."""
+    """Sample a smooth positive series constrained to the interval [lower, upper]."""
     generator = np.random.default_rng() if rng is None else rng
     frequency_array = np.atleast_1d(np.asarray(frequencies, dtype=float))
     phase_array = np.atleast_1d(np.asarray(phases, dtype=float))
@@ -28,12 +41,12 @@ def bounded_periodic_series(
     for frequency, phase in zip(frequency_array, phase_array, strict=True):
         angles = np.linspace(0.0, frequency * 2.0 * np.pi, n_samples) + phase
         latent_signal = generator.normal(loc=np.cos(angles), scale=noise_scale)
+        latent_signal = np.clip(latent_signal, -1.0, 1.0)
         samples *= np.exp(log_scale * latent_signal + log_shift)
-    return np.power(samples, 1.0 / len(frequency_array))
+    return np.clip(np.power(samples, 1.0 / len(frequency_array)), lower, upper)
 
 
-def sample_ad_group(
-    group_id: int = 0,
+def _sample_ad_group_latent_paths(
     mean_spend: float = 100.0,
     mean_ratio: float = 5.0,
     mean_samples: float = 24 * 7,
@@ -41,8 +54,8 @@ def sample_ad_group(
     num_frequencies: int = 2,
     max_time_offset: int = 24 * 9,
     rng: np.random.Generator | None = None,
-) -> pd.DataFrame:
-    """Sample one synthetic ad group with spend, count, and true ratio."""
+) -> _LatentAdGroupPaths:
+    """Sample bounded latent spend and ratio paths for one synthetic ad group."""
     generator = np.random.default_rng() if rng is None else rng
 
     n_samples = max_time_offset
@@ -55,7 +68,7 @@ def sample_ad_group(
     min_spend, max_spend = np.sort(generator.exponential(mean_spend, 2))
     min_ratio, max_ratio = np.sort(generator.exponential(mean_ratio, 2))
 
-    spend = bounded_periodic_series(
+    spend_mean = bounded_periodic_series(
         min_spend,
         max_spend,
         n_samples=n_samples,
@@ -71,22 +84,62 @@ def sample_ad_group(
         phases=phases,
         rng=generator,
     )
-    count = np.asarray(spend / true_ratio, dtype=int)
+    count_mean = spend_mean / true_ratio
     offset_series = offset + np.arange(n_samples, dtype=int)
+    return _LatentAdGroupPaths(
+        offset_series=offset_series,
+        spend_mean=spend_mean,
+        count_mean=count_mean,
+        true_ratio=true_ratio,
+    )
+
+
+def sample_ad_group(
+    group_id: int = 0,
+    mean_spend: float = 100.0,
+    mean_ratio: float = 5.0,
+    mean_samples: float = 24 * 7,
+    mean_frequency: float = 1.5,
+    num_frequencies: int = 2,
+    max_time_offset: int = 24 * 9,
+    spend_resolution: int = 25,
+    spend_dispersion: float = 0.75,
+    rng: np.random.Generator | None = None,
+) -> pd.DataFrame:
+    """Sample one synthetic ad group from latent bounded means and stochastic observations."""
+    generator = np.random.default_rng() if rng is None else rng
+    latent_paths = _sample_ad_group_latent_paths(
+        mean_spend=mean_spend,
+        mean_ratio=mean_ratio,
+        mean_samples=mean_samples,
+        mean_frequency=mean_frequency,
+        num_frequencies=num_frequencies,
+        max_time_offset=max_time_offset,
+        rng=generator,
+    )
+    spend = (
+        sample_negative_binomial(
+            spend_resolution * latent_paths.spend_mean,
+            dispersion=spend_dispersion,
+            rng=generator,
+        )
+        / spend_resolution
+    )
+    count = sample_poisson(latent_paths.count_mean, rng=generator)
 
     return pd.DataFrame(
         {
             "id": group_id,
-            "offset": offset_series,
+            "offset": latent_paths.offset_series,
             "spend": spend,
             "count": count,
-            "true_ratio": true_ratio,
+            "true_ratio": latent_paths.true_ratio,
         }
     )
 
 
 def add_autoregressive_features(frame: pd.DataFrame, history_length: int = 3) -> pd.DataFrame:
-    """Add padded rolling ratio-share features, including the current observation."""
+    """Add padded rolling ratio-share features from previous observations only."""
     if frame.empty:
         result = frame.copy()
         result["features"] = pd.Series(dtype=object)
@@ -94,9 +147,15 @@ def add_autoregressive_features(frame: pd.DataFrame, history_length: int = 3) ->
 
     spend = frame["spend"].to_numpy(dtype=float)
     count = frame["count"].to_numpy(dtype=float)
-    ratio_share = spend / (spend + count)
-    padded_share = np.pad(ratio_share, (history_length - 1, 0))
-    feature_matrix = sliding_window_view(padded_share, history_length).copy()
+    total = spend + count
+    ratio_share = np.divide(
+        spend,
+        total,
+        out=np.zeros_like(spend, dtype=float),
+        where=total > 0.0,
+    )
+    lagged_share = np.pad(ratio_share, (history_length, 0))[:-1]
+    feature_matrix = sliding_window_view(lagged_share, history_length).copy()
 
     result = frame.copy()
     result["features"] = list(feature_matrix)
@@ -109,7 +168,7 @@ def generate_dataset(
     rng: np.random.Generator | None = None,
     **group_kwargs: Any,
 ) -> pd.DataFrame:
-    """Generate a multi-group panel with the maintained benchmark feature semantics."""
+    """Generate a multi-group panel with causal lagged ratio-share experiment features."""
     generator = np.random.default_rng() if rng is None else rng
     frames = [
         add_autoregressive_features(

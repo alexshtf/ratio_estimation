@@ -8,6 +8,7 @@ from .features import (
     inverse_softplus_normalizer,
     log_ratio_normalizer,
     share_normalizer,
+    smoothed_inverse_softplus_normalizer,
 )
 from .models import (
     ExponentialLink,
@@ -48,4 +49,5 @@ __all__ = [
     "sample_negative_binomial",
     "sample_poisson",
     "share_normalizer",
+    "smoothed_inverse_softplus_normalizer",
 ]
