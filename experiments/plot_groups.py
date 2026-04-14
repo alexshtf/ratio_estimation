@@ -56,11 +56,13 @@ def _observed_ratio_series(frame: pd.DataFrame) -> np.ndarray:
 def _campaign_summary_lines(frame: pd.DataFrame) -> list[str]:
     """Summarize one campaign for the HTML report."""
     offsets = frame["offset"].to_numpy(dtype=int, copy=False)
+    zero_spend_rows = int((frame["spend"].to_numpy(dtype=float, copy=False) == 0.0).sum())
     zero_count_rows = int((frame["count"].to_numpy(dtype=int, copy=False) == 0).sum())
     return [
         f"campaign_id={int(frame['id'].iloc[0])}",
         f"rows={len(frame)}",
         f"offset_range=[{int(offsets.min())}, {int(offsets.max())}]",
+        f"zero_spend_rows={zero_spend_rows}",
         f"zero_count_rows={zero_count_rows}",
     ]
 
@@ -135,7 +137,8 @@ def _render_report_html(groups: list[pd.DataFrame], metadata: dict[str, Any]) ->
                 f"<h2>Campaign {campaign_id}</h2>",
                 f"<pre>{campaign_summary}</pre>",
                 (
-                    "<p>Observed Ratio is shown only where count &gt; 0. "
+                    "<p>True Ratio is the latent ratio of means for the campaign. "
+                    "Observed Ratio is shown only where count &gt; 0. "
                     "Rows with count == 0 are marked on the True Ratio curve.</p>"
                 ),
                 _render_campaign_figure_svg(frame),
@@ -193,6 +196,7 @@ def run_plot_groups(
                 "rows": len(frame),
                 "offset_start": int(frame["offset"].min()),
                 "offset_end": int(frame["offset"].max()),
+                "zero_spend_rows": int((frame["spend"] == 0.0).sum()),
                 "zero_count_rows": int((frame["count"] == 0).sum()),
             }
             for frame in groups

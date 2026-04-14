@@ -21,19 +21,17 @@ Items marked `Resolved` have been fixed on the current branch. Unmarked items re
 - Notes:
   - The leakage-preserving smoke test was replaced with a causal regression test.
 
-## 2. High: the experiment generator does not match its implied target semantics
+## 2. Resolved: the experiment generator now uses bounded latent means with stochastic observations
 
 - Files:
   - `experiments/data.py:10-32`
   - `experiments/data.py:35-85`
 - Problem:
-  - `bounded_periodic_series(...)` is described as bounded between `lower` and `upper`, but the added Gaussian noise can push samples outside that range.
-  - `sample_ad_group(...)` generates `true_ratio` first, then sets `count = int(spend / true_ratio)`.
-  - Because `count` is floored to an integer, the realized observed ratio `spend / count` is not equal to `true_ratio`.
-  - When `count` floors to zero, finite `true_ratio` values create effectively infinite observed ratios.
+  - The original helper claimed bounded periodic series, but Gaussian perturbations could escape the declared interval.
+  - The original generator also set `count = int(spend / true_ratio)`, so `true_ratio` was not the ratio of latent means and zero-count rows came from flooring artifacts.
 - Impact:
-  - The experiment data does not cleanly represent a stochastic process with a well-defined realized conditional ratio around `true_ratio`.
-  - Zero-count rows are introduced by rounding, not only by intended sampling noise.
+  - The experiment generator now builds bounded latent `spend_mean` and `true_ratio` paths first, defines `count_mean = spend_mean / true_ratio`, and samples observed count and spend from Poisson and negative-binomial observation models.
+  - Experiment `true_ratio` values now have a precise meaning as latent ratios of means, and zero-count rows arise from the observation model rather than deterministic flooring.
 
 ## 3. Medium-high: decay baselines under-decay across sparse gaps and large jumps
 
@@ -117,8 +115,6 @@ Items marked `Resolved` have been fixed on the current branch. Unmarked items re
 - Missing direct tests for:
   - `LinearInverseRatioLearner`
   - `DecayRatioBaseline`
-  - `bounded_periodic_series(...)` bounds semantics
-  - `sample_ad_group(...)` zero-count and realized-ratio behavior
   - single-sample behavior in `weighted_mean_and_stderr(...)`
 
 ## Check Status At Audit Time

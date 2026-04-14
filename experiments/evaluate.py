@@ -78,9 +78,10 @@ def _stream_arrays(frame: pd.DataFrame, input_column: str) -> _StreamArrays:
 
 def log_ratio_error(prediction: float, numerator: float, denominator: float) -> float:
     """Compute the absolute log-ratio error against the observed ratio."""
-    safe_prediction = float(np.nextafter(prediction, np.inf))
-    safe_numerator = float(np.nextafter(numerator, np.inf))
-    safe_denominator = float(np.nextafter(denominator, np.inf))
+    min_positive = float(np.nextafter(0.0, np.inf))
+    safe_prediction = max(float(prediction), min_positive)
+    safe_numerator = max(float(numerator), min_positive)
+    safe_denominator = max(float(denominator), min_positive)
     return float(abs(np.log(safe_prediction) - np.log(safe_numerator) + np.log(safe_denominator)))
 
 
@@ -103,7 +104,8 @@ def diagnose_stream(
     n_rows = len(stream.spend)
     predictions = np.empty(n_rows, dtype=float)
     log_errors = np.empty(n_rows, dtype=float)
-    actual_ratio = np.nextafter(stream.spend, np.inf) / np.nextafter(stream.count, np.inf)
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        actual_ratio = np.nextafter(stream.spend, np.inf) / np.nextafter(stream.count, np.inf)
 
     for index, (x, numerator, denominator) in enumerate(
         zip(stream.inputs, stream.spend, stream.count, strict=True)

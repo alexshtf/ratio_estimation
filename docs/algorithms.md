@@ -90,6 +90,13 @@ In the experiment layer, the maintained panel builders use causal lag windows: t
 feature vector for row `t` is built from previous observations only, never from the
 current row's observed spend or count.
 
+The experiment-layer synthetic panels use a simpler bounded periodic generator than the
+stable library simulator, but they follow the same observation pattern: bounded latent
+spend means and bounded latent true-ratio paths are sampled first, then observed count
+is drawn from a Poisson model and observed spend from an overdispersed negative-binomial
+model. In those experiment frames, `true_ratio` is the latent ratio of means rather than
+the realized row-wise `spend / count`.
+
 ## Simulation Model
 
 The simulator builds two smooth latent campaign processes from:

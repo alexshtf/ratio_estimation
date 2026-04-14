@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import experiments.benchmark as benchmark_module
+import experiments.data as data_module
 from experiments.baselines import CampaignRunningRatioBaseline
 from experiments.benchmark import (
     BASELINE_MODEL_NAME,
@@ -22,10 +23,17 @@ from experiments.benchmark import (
     run_benchmark,
 )
 from experiments.compare import compare_models
-from experiments.data import add_autoregressive_features, generate_dataset
+from experiments.data import (
+    _sample_ad_group_latent_paths,
+    add_autoregressive_features,
+    bounded_periodic_series,
+    generate_dataset,
+    sample_ad_group,
+)
 from experiments.evaluate import (
     PanelLossSamples,
     diagnose_stream,
+    log_ratio_error,
     panel_loss_samples,
     rollout_stream,
     run_panel,
@@ -87,6 +95,69 @@ def test_generate_single_stream_has_expected_columns() -> None:
     assert set(stream["id"]) == {0}
 
 
+def test_bounded_periodic_series_stays_within_declared_bounds() -> None:
+    series = bounded_periodic_series(
+        2.0,
+        5.0,
+        n_samples=256,
+        frequencies=np.array([1, 3]),
+        phases=np.array([0.2, 1.4]),
+        noise_scale=0.4,
+        rng=np.random.default_rng(0),
+    )
+    assert np.all(series >= 2.0)
+    assert np.all(series <= 5.0)
+
+
+def test_sample_ad_group_latent_paths_are_reproducible_and_ratio_consistent() -> None:
+    first = _sample_ad_group_latent_paths(rng=np.random.default_rng(0))
+    second = _sample_ad_group_latent_paths(rng=np.random.default_rng(0))
+
+    np.testing.assert_array_equal(first.offset_series, second.offset_series)
+    np.testing.assert_allclose(first.spend_mean, second.spend_mean)
+    np.testing.assert_allclose(first.count_mean, second.count_mean)
+    np.testing.assert_allclose(first.true_ratio, second.true_ratio)
+    np.testing.assert_allclose(first.true_ratio, first.spend_mean / first.count_mean)
+
+
+def test_sample_ad_group_uses_observation_samplers_instead_of_flooring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    latent_paths = data_module._LatentAdGroupPaths(
+        offset_series=np.array([5, 6], dtype=int),
+        spend_mean=np.array([10.0, 20.0]),
+        count_mean=np.array([2.0, 4.0]),
+        true_ratio=np.array([5.0, 5.0]),
+    )
+
+    monkeypatch.setattr(
+        data_module,
+        "_sample_ad_group_latent_paths",
+        lambda *args, **kwargs: latent_paths,
+    )
+    monkeypatch.setattr(
+        data_module,
+        "sample_negative_binomial",
+        lambda mean, dispersion=0.75, rng=None: np.array([250, 0], dtype=int),
+    )
+    monkeypatch.setattr(
+        data_module,
+        "sample_poisson",
+        lambda mean, rng=None: np.array([7, 8], dtype=int),
+    )
+
+    frame = sample_ad_group(group_id=3, spend_resolution=25, rng=np.random.default_rng(0))
+
+    np.testing.assert_array_equal(frame["offset"].to_numpy(), np.array([5, 6]))
+    np.testing.assert_allclose(frame["spend"].to_numpy(dtype=float), np.array([10.0, 0.0]))
+    np.testing.assert_array_equal(frame["count"].to_numpy(dtype=int), np.array([7, 8]))
+    np.testing.assert_allclose(frame["true_ratio"].to_numpy(dtype=float), np.array([5.0, 5.0]))
+    assert not np.array_equal(
+        frame["count"].to_numpy(dtype=int),
+        np.asarray(latent_paths.spend_mean / latent_paths.true_ratio, dtype=int),
+    )
+
+
 def test_shared_registry_preserves_benchmark_and_single_stream_membership() -> None:
     benchmark_names = [spec.name for spec in build_benchmark_specs(history_length=4)]
     single_stream_names = list(build_single_stream_specs(history_length=4))
@@ -99,6 +170,10 @@ def test_rollout_stream_returns_prediction_frame() -> None:
     learner = RatioProximalLearner(link=SoftplusLink(), step_size=0.1, regularization=1.0)
     rollout = rollout_stream(dataset, learner)
     assert {"prediction", "actual_ratio", "true_ratio", "log_error"} <= set(rollout.columns)
+
+
+def test_log_ratio_error_clips_nonpositive_predictions() -> None:
+    assert np.isfinite(log_ratio_error(prediction=-1.0, numerator=2.0, denominator=1.0))
 
 
 def test_generate_dataset_matches_benchmark_rolling_feature_semantics() -> None:
@@ -409,10 +484,12 @@ def test_run_plot_groups_writes_html_report(tmp_path: Path) -> None:
     assert metadata["seed"] == 0
     assert metadata["groups"] == 2
     assert metadata["artifacts"]["report_html"] == str(result.report_path)
+    assert "zero_spend_rows" in metadata["campaign_summaries"][0]
 
     report_html = result.report_path.read_text()
     assert "<svg" in report_html
     assert "Campaign 0" in report_html
+    assert "zero_spend_rows=" in report_html
     assert "Observed Ratio is shown only where count &gt; 0." in report_html
 
 

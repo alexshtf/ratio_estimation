@@ -85,6 +85,11 @@ The experiment dataset builders use causal lag windows: each row's `features` ve
 contains only the previous `history_length` ratio-share observations for that campaign,
 with zero padding at the start of the stream.
 
+The experiment generator itself uses bounded periodic latent means for spend and the
+true ratio, then samples observed spend from an overdispersed negative-binomial model
+and observed count from a Poisson model. In experiment artifacts, `true_ratio` refers
+to that latent ratio of means, not the realized row-wise `spend / count`.
+
 `make stream` tunes one or more models on a single synthetic stream, writes the stream,
 per-model traces, final states, and summary files under `artifacts/single_stream/...`, and
 uses the maintained tail-loss sanity objective.
