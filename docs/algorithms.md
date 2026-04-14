@@ -57,6 +57,7 @@ That is the core idea behind the direct ratio learner.
 The repo uses positive link functions for the ratio:
 
 - exponential: `r̂ = eᶻ`
+- inverse exponential: fit `exp(z) ≈ E[y_den | x] / E[y_num | x]` and predict `exp(-z)`
 - positive-part linear: `r̂ = max(0, z)`
 - softplus: `r̂ = log(1 + eᶻ)`
 
@@ -139,16 +140,25 @@ The experiment layer includes simpler comparison models:
 
 - linear ratio regression
 - linear inverse-ratio regression
+- exponential ratio regression
+- exponential inverse-ratio regression
 - ratio-of-regressors baselines
-- exponential and quadratic online baselines
+- quadratic online baselines
 - simple decay-based estimators
 
 These are useful comparison points, but the core library is organized around the direct ratio loss and its proximal updates.
 
+The maintained experiment suite now mirrors the linear pair for the exponential
+family as well: `exponential` fits `spend / count` directly, while
+`inverse_exponential` fits `count / spend` internally and returns its reciprocal
+from `predict`.
+
 The maintained benchmark report keeps the weighted mean log-error summary table and adds
 weighted REC curves for the `tune`, `same`, and `shifted` splits. Those REC curves also
 include the online `campaign_running_ratio` baseline, which predicts each campaign's
-cumulative observed spend-to-count ratio before the current update.
+cumulative observed spend-to-count ratio before the current update. The HTML
+report now shows both the full REC panels and a second zoomed row over the
+error range `[0, 10]` with a larger asinh linear-width region.
 
 ## Further Reading In Code
 

@@ -13,6 +13,7 @@ from sklearn.linear_model import SGDRegressor
 from ratio_estimation._state import state_snapshot
 
 MAX_LOG_FLOAT = float(np.log(sys.float_info.max))
+MIN_LOG_FLOAT = float(np.log(np.finfo(float).tiny))
 
 
 class RatioOfRegressorsBaseline:
@@ -190,21 +191,37 @@ class QuadraticRatioBaseline:
 
 
 class ExponentialRatioBaseline:
-    """Fit an exponential ratio model with closed-form dual updates."""
+    """Fit an exponential ratio or inverse-ratio model with closed-form dual updates."""
 
-    def __init__(self, dimension: int, step_size: float, regularization: float) -> None:
+    def __init__(
+        self,
+        dimension: int,
+        step_size: float,
+        regularization: float,
+        inverse: bool = False,
+    ) -> None:
         self.weights = np.zeros(dimension, dtype=float)
-        self.bias = 1.0
+        self.bias = 0.0
         self.step_size = step_size
         self.regularization = regularization
+        self.inverse = inverse
         self.iteration = 1
 
     def update(self, x: ArrayLike, numerator: float, denominator: float) -> None:
         """Fit one streaming observation."""
         features = np.asarray(x, dtype=float)
+        learned_numerator, learned_denominator = (
+            (denominator, numerator) if self.inverse else (numerator, denominator)
+        )
         step = self.step_size / np.sqrt(self.iteration)
         shrink = 1.0 + step * self.regularization
-        dual = self._dual_solution(features, numerator, denominator, step, shrink)
+        dual = self._dual_solution(
+            features,
+            learned_numerator,
+            learned_denominator,
+            step,
+            shrink,
+        )
         self.weights = (self.weights - step * dual * features) / shrink
         self.bias = (self.bias - step * dual) / shrink
         self.iteration += 1
@@ -213,7 +230,8 @@ class ExponentialRatioBaseline:
         """Predict a positive ratio."""
         features = np.asarray(x, dtype=float)
         score = float(np.dot(self.weights, features) + self.bias)
-        return float(np.exp(min(score, MAX_LOG_FLOAT)))
+        prediction_score = -score if self.inverse else score
+        return float(np.exp(np.clip(prediction_score, MIN_LOG_FLOAT, MAX_LOG_FLOAT)))
 
     def _dual_solution(
         self,
@@ -241,6 +259,7 @@ class ExponentialRatioBaseline:
             bias=self.bias,
             step_size=self.step_size,
             regularization=self.regularization,
+            inverse=self.inverse,
             iteration=self.iteration,
         )
 

@@ -46,6 +46,9 @@ BENCHMARK_WARMUP_STEPS = 2
 BENCHMARK_EVALUATION_PROGRESS_FREQUENCY = 1_000
 BENCHMARK_FLOAT_DISPLAY_WIDTH = 10
 REPORT_DATASETS = ("tune", "same", "shifted")
+REC_LINEAR_WIDTH = 0.01
+REC_ZOOM_LINEAR_WIDTH = 1.0
+REC_ZOOM_XMAX = 10.0
 
 type BenchmarkModelSpec = ExperimentModelSpec
 type TuneProgressCallback = Callable[[int, int, float, float, float], None]
@@ -503,10 +506,10 @@ def _render_rec_figure_svg(
     curves_by_dataset: dict[str, dict[str, _RecCurve]],
     model_order: list[str],
 ) -> str:
-    """Render the three split REC panels as one inline SVG figure."""
+    """Render overview and zoomed REC panels for the three benchmark splits."""
     import matplotlib.pyplot as plt
 
-    figure, axes = plt.subplots(1, 3, figsize=(15.0, 4.8), sharey=True)
+    figure, axes = plt.subplots(2, 3, figsize=(15.0, 8.6), sharey=True)
     figure.suptitle("Benchmark REC Curves")
     panel_titles = {
         "tune": "Tune",
@@ -514,27 +517,42 @@ def _render_rec_figure_svg(
         "shifted": "Shifted",
     }
 
-    for axis, dataset_name in zip(axes, REPORT_DATASETS, strict=True):
+    for column_index, dataset_name in enumerate(REPORT_DATASETS):
+        overview_axis = axes[0, column_index]
+        zoom_axis = axes[1, column_index]
         for model_name in model_order:
             curve = curves_by_dataset[dataset_name][model_name]
             if len(curve.error_thresholds) == 0:
                 continue
-            axis.step(
+            overview_axis.step(
                 curve.error_thresholds,
                 curve.cdf,
                 where="post",
                 label=model_name,
             )
-        axis.set_title(f"{panel_titles[dataset_name]} REC")
-        axis.set_xscale("asinh", linear_width=0.01)
-        axis.set_xlabel("Absolute log-ratio error (asinh scale)")
-        axis.set_ylim(0.0, 1.0)
+            zoom_axis.step(
+                curve.error_thresholds,
+                curve.cdf,
+                where="post",
+                label=model_name,
+            )
+        overview_axis.set_title(f"{panel_titles[dataset_name]} REC")
+        overview_axis.set_xscale("asinh", linear_width=REC_LINEAR_WIDTH)
+        overview_axis.set_xlabel("Absolute log-ratio error (asinh scale)")
+        overview_axis.set_ylim(0.0, 1.0)
 
-    axes[0].set_ylabel("Spend-weighted CDF")
-    handles, labels = axes[0].get_legend_handles_labels()
+        zoom_axis.set_title(f"{panel_titles[dataset_name]} REC Zoom")
+        zoom_axis.set_xscale("asinh", linear_width=REC_ZOOM_LINEAR_WIDTH)
+        zoom_axis.set_xlim(0.0, REC_ZOOM_XMAX)
+        zoom_axis.set_xlabel("Absolute log-ratio error (zoomed to [0, 10])")
+        zoom_axis.set_ylim(0.0, 1.0)
+
+    axes[0, 0].set_ylabel("Spend-weighted CDF")
+    axes[1, 0].set_ylabel("Spend-weighted CDF")
+    handles, labels = axes[0, 0].get_legend_handles_labels()
     if handles:
         figure.legend(handles, labels, loc="lower center", ncol=3)
-    figure.subplots_adjust(bottom=0.34, top=0.82, wspace=0.2)
+    figure.subplots_adjust(bottom=0.18, top=0.90, hspace=0.45, wspace=0.2)
 
     buffer = StringIO()
     figure.savefig(buffer, format="svg")
