@@ -47,17 +47,17 @@ Items marked `Resolved` have been fixed on the current branch. Unmarked items re
   - Sparse events retain stale history too strongly because missed hourly or interval decays are never applied.
   - Large COST or COUNT jumps also retain too much history because only one decay is applied no matter how many buckets were crossed.
 
-## 4. Medium: public `LinearInverseRatioLearner` can emit infinite or invalid predictions
+## 4. Resolved: `LinearInverseRatioLearner` now keeps predictions finite and positive
 
 - File:
   - `src/ratio_estimation/models.py:160-190`
 - Problem:
-  - `predict(...)` returns `1 / dot(weights, x)`.
-  - With zero-initialized weights, the first prediction is `inf` for any nonzero feature vector.
-  - Negative or zero scores lead to undefined or sign-invalid ratio predictions.
+  - The original `predict(...)` returned `1 / dot(weights, x)` directly.
+  - With zero-initialized weights, the first prediction was `inf` for any nonzero feature vector.
+  - Negative or zero inverse scores also produced invalid ratio predictions.
 - Impact:
-  - The stable public library exposes a learner that can violate the positive-ratio contract immediately.
-  - There is no test coverage for this class.
+  - `predict(...)` now clips the inverse score to a tiny positive floor before taking the reciprocal, so the learner satisfies the positive finite ratio contract from cold start onward.
+  - Direct regression tests were added for cold-start, negative-score, and stream rollout behavior.
 
 ## 5. Medium-low: `inverse_softplus_normalizer` is a documentation and naming mismatch, not necessarily a math bug
 
@@ -113,7 +113,6 @@ Items marked `Resolved` have been fixed on the current branch. Unmarked items re
 ## Coverage Gaps
 
 - Missing direct tests for:
-  - `LinearInverseRatioLearner`
   - `DecayRatioBaseline`
   - single-sample behavior in `weighted_mean_and_stderr(...)`
 

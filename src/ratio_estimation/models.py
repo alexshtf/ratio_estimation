@@ -17,6 +17,7 @@ from .proximal import (
 )
 
 FloatArray = NDArray[np.float64]
+MIN_POSITIVE_INVERSE_SCORE = float(np.finfo(float).tiny)
 
 
 class PositiveLink(Protocol):
@@ -187,7 +188,8 @@ class LinearInverseRatioLearner:
         features = np.asarray(x, dtype=float)
         if self.weights is None:
             self.weights = np.zeros_like(features)
-        return float(np.reciprocal(np.dot(self.weights, features)))
+        inverse_score = max(float(np.dot(self.weights, features)), MIN_POSITIVE_INVERSE_SCORE)
+        return float(np.reciprocal(inverse_score))
 
     def state_dict(self) -> dict[str, object]:
         """Return a lightweight snapshot of the current learner state."""
