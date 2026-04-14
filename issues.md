@@ -59,21 +59,21 @@ Items marked `Resolved` have been fixed on the current branch. Unmarked items re
   - `predict(...)` now clips the inverse score to a tiny positive floor before taking the reciprocal, so the learner satisfies the positive finite ratio contract from cold start onward.
   - Direct regression tests were added for cold-start, negative-score, and stream rollout behavior.
 
-## 5. Medium-low: `inverse_softplus_normalizer` is a documentation and naming mismatch, not necessarily a math bug
+## 5. Resolved: the smoothed inverse-softplus normalizer is now named and documented honestly
 
 - Files:
   - `src/ratio_estimation/features.py:54-58`
   - `src/ratio_estimation/features.py:94-120`
   - `docs/algorithms.md:81-87`
 - Problem:
-  - The implementation uses additive smoothing:
+  - The maintained implementation uses additive smoothing:
     - `ratio = (1 + numerator) / (1 + denominator)`
     - `value = log(expm1(ratio))`
-  - That smoothing is intentional and defensible because the raw ratio can be singular or non-finite when `denominator = 0`, `numerator = 0`, or both.
-  - The issue is that the function name and docs make it sound like the exact inverse-softplus transform of the raw ratio, which it is not.
+  - That smoothing is intentional and necessary because the raw ratio can be singular or non-finite.
+  - The old name and docs made it sound like the exact inverse-softplus transform of `numerator / denominator`.
 - Impact:
-  - Readers can easily infer the wrong mathematical meaning from the current API name and documentation.
-  - The maintained default feature pipeline is better described as a smoothed inverse-softplus-style normalizer rather than the exact inverse-softplus of `numerator / denominator`.
+  - The public API now exposes `smoothed_inverse_softplus_normalizer` as the primary name and uses it as the default in `AutoregressiveRatioFeatures`.
+  - The legacy `inverse_softplus_normalizer` name remains as a backward-compatible alias, and the docs now describe the smoothing explicitly.
 
 ## 6. Medium: zero/zero observations are scored with an arbitrary large penalty
 

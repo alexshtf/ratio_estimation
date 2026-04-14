@@ -46,6 +46,10 @@ for spend, count in zip(campaign.spend, campaign.count, strict=True):
     feature_builder.update(spend, count)
 ```
 
+`AutoregressiveRatioFeatures` now defaults to the explicit
+`smoothed_inverse_softplus_normalizer`. The legacy
+`inverse_softplus_normalizer` name remains available as a backward-compatible alias.
+
 ## Experiment Examples
 
 ```bash
