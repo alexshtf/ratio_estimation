@@ -186,16 +186,31 @@ def tail_mean_log_error(trace: pd.DataFrame, tail_fraction: float = 0.5) -> floa
     return float(np.mean(finite_errors))
 
 
+def _positive_weighted_samples(
+    weights: np.ndarray,
+    values: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the finite samples with strictly positive weights."""
+    positive_weight_mask = (
+        np.isfinite(weights) & np.isfinite(values) & (np.asarray(weights, dtype=float) > 0.0)
+    )
+    return weights[positive_weight_mask], values[positive_weight_mask]
+
+
 def weighted_mean_and_stderr(weights: np.ndarray, values: np.ndarray) -> tuple[float, float]:
-    """Return a weighted mean and the Gatz-Smith standard error estimate."""
-    mean_value = float(np.average(values, weights=weights))
-    n_samples = len(values)
+    """Return a weighted mean and the Gatz-Smith standard error over positive weights."""
+    retained_weights, retained_values = _positive_weighted_samples(weights, values)
+    if len(retained_values) == 0:
+        return float("nan"), float("nan")
+
+    mean_value = float(np.average(retained_values, weights=retained_weights))
+    n_samples = len(retained_values)
     if n_samples <= 1:
         return mean_value, 0.0
-    mean_weight = float(np.mean(weights))
+    mean_weight = float(np.mean(retained_weights))
     stderr_squared = (
         n_samples
-        * np.sum(np.square(weights) * np.square(values - mean_value))
+        * np.sum(np.square(retained_weights) * np.square(retained_values - mean_value))
         / ((n_samples - 1) * (n_samples * mean_weight) ** 2)
     )
     return mean_value, float(np.sqrt(stderr_squared))

@@ -57,6 +57,8 @@ def _sample_ad_group_latent_paths(
 ) -> _LatentAdGroupPaths:
     """Sample bounded latent spend and ratio paths for one synthetic ad group."""
     generator = np.random.default_rng() if rng is None else rng
+    if max_time_offset < 2:
+        raise ValueError("max_time_offset must be at least 2 for the experiment generator.")
 
     n_samples = max_time_offset
     while n_samples + 1 > max_time_offset:
@@ -106,7 +108,10 @@ def sample_ad_group(
     spend_dispersion: float = 0.75,
     rng: np.random.Generator | None = None,
 ) -> pd.DataFrame:
-    """Sample one synthetic ad group from latent bounded means and stochastic observations."""
+    """Sample one synthetic ad group from latent bounded means and stochastic observations.
+
+    The experiment generator requires `max_time_offset >= 2`.
+    """
     generator = np.random.default_rng() if rng is None else rng
     latent_paths = _sample_ad_group_latent_paths(
         mean_spend=mean_spend,

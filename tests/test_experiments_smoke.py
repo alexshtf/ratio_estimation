@@ -16,8 +16,8 @@ from experiments.baselines import (
     ExponentialRatioBaseline,
     RatioOfRegressorsBaseline,
 )
-from experiments.benchmark import (
-    BASELINE_MODEL_NAME,
+from experiments.benchmark import BASELINE_MODEL_NAME, build_benchmark_specs, run_benchmark
+from experiments.benchmark_progress import (
     BENCHMARK_FLOAT_DISPLAY_WIDTH,
     _format_evaluation_progress,
     _format_float_cell,
@@ -26,10 +26,8 @@ from experiments.benchmark import (
     _progress_table_widths,
     _ProgressRowState,
     _should_use_rich_progress,
-    _weighted_rec_curve,
-    build_benchmark_specs,
-    run_benchmark,
 )
+from experiments.benchmark_report import _weighted_rec_curve
 from experiments.compare import compare_models
 from experiments.data import (
     _sample_ad_group_latent_paths,
@@ -127,6 +125,14 @@ def test_sample_ad_group_latent_paths_are_reproducible_and_ratio_consistent() ->
     np.testing.assert_allclose(first.count_mean, second.count_mean)
     np.testing.assert_allclose(first.true_ratio, second.true_ratio)
     np.testing.assert_allclose(first.true_ratio, first.spend_mean / first.count_mean)
+
+
+def test_sample_ad_group_latent_paths_reject_one_slot_panels() -> None:
+    with pytest.raises(
+        ValueError,
+        match="max_time_offset must be at least 2 for the experiment generator.",
+    ):
+        _sample_ad_group_latent_paths(max_time_offset=1, rng=np.random.default_rng(0))
 
 
 def test_sample_ad_group_uses_observation_samplers_instead_of_flooring(
@@ -367,6 +373,24 @@ def test_weighted_mean_and_stderr_returns_zero_stderr_for_one_sample() -> None:
     assert stderr == 0.0
 
 
+def test_weighted_mean_and_stderr_drops_zero_weight_rows() -> None:
+    mean_loss, stderr = weighted_mean_and_stderr(
+        np.array([0.0, 2.0]),
+        np.array([99.0, 3.5]),
+    )
+    assert mean_loss == 3.5
+    assert stderr == 0.0
+
+
+def test_weighted_mean_and_stderr_returns_nan_for_all_zero_weights() -> None:
+    mean_loss, stderr = weighted_mean_and_stderr(
+        np.array([0.0, 0.0]),
+        np.array([1.0, 2.0]),
+    )
+    assert np.isnan(mean_loss)
+    assert np.isnan(stderr)
+
+
 def test_campaign_running_ratio_baseline_uses_cumulative_history() -> None:
     baseline = CampaignRunningRatioBaseline()
     assert baseline.predict() == 1.0
@@ -407,6 +431,17 @@ def test_weighted_rec_curve_is_monotone_and_ends_at_one() -> None:
     np.testing.assert_allclose(curve.cdf, np.array([0.0, 0.5, 1.0]))
     assert np.all(np.diff(curve.error_thresholds) >= 0.0)
     assert np.all(np.diff(curve.cdf) >= 0.0)
+
+
+def test_weighted_rec_curve_ignores_zero_weight_rows() -> None:
+    curve = _weighted_rec_curve(
+        PanelLossSamples(
+            weights=np.array([0.0, 2.0, 1.0]),
+            losses=np.array([0.0, 0.1, 0.3]),
+        )
+    )
+    np.testing.assert_allclose(curve.error_thresholds, np.array([0.0, 0.1, 0.3]))
+    np.testing.assert_allclose(curve.cdf, np.array([0.0, 2.0 / 3.0, 1.0]))
 
 
 def test_benchmark_progress_row_defaults() -> None:
@@ -519,6 +554,31 @@ def test_score_stream_tail_matches_trace_tail_loss() -> None:
         tail_score,
         diagnostics.tail_mean_log_error(tail_fraction=tail_fraction),
     )
+
+
+def test_run_panel_returns_nan_when_all_retained_spend_weights_are_zero() -> None:
+    frame = pd.DataFrame(
+        {
+            "id": [0, 0, 0],
+            "features": [np.zeros(2)] * 3,
+            "spend": [0.0, 0.0, 0.0],
+            "count": [1.0, 1.0, 1.0],
+        }
+    )
+    mean_loss, stderr = cast(
+        tuple[float, float],
+        run_panel(
+            frame,
+            model_factory=lambda: RatioProximalLearner(
+                link=SoftplusLink(),
+                step_size=0.1,
+                regularization=1.0,
+            ),
+            return_stderr=True,
+        ),
+    )
+    assert np.isnan(mean_loss)
+    assert np.isnan(stderr)
 
 
 def test_run_benchmark_writes_expected_artifacts(tmp_path: Path) -> None:
