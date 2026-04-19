@@ -3,52 +3,49 @@
 from __future__ import annotations
 
 import argparse
-import html
-import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from io import StringIO
 from pathlib import Path
-from types import TracebackType
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import numpy as np
 import optuna
 import pandas as pd
 
 from .baselines import CampaignRunningRatioBaseline
+from .benchmark_progress import (
+    _BenchmarkProgress,
+    _build_benchmark_progress,
+    _format_evaluation_progress,
+    _format_loss,
+    _format_tune_sec_per_trial,
+    _format_tuning_progress,
+)
+from .benchmark_report import (
+    REPORT_DATASETS,
+    _RecCurve,
+    _render_rec_figure_svg,
+    _render_report_html,
+    _weighted_rec_curve,
+    write_artifacts,
+)
 from .data import generate_dataset
 from .evaluate import (
-    PanelLossSamples,
     PanelProgressCallback,
     StreamingModel,
     panel_loss_samples,
     run_panel,
     summarize_panel_losses,
 )
-from .io import (
-    make_json_safe,
-    strip_svg_preamble,
-    timestamped_output_dir,
-    write_dataframe_artifacts,
-    write_json_artifact,
-)
+from .io import make_json_safe, timestamped_output_dir
 from .registry import ExperimentModelSpec, benchmark_model_specs
-
-if TYPE_CHECKING:
-    from rich.console import RenderableType
 
 BASELINE_MODEL_NAME = "campaign_running_ratio"
 BASELINE_INPUT_COLUMN = "offset"
 BASELINE_DEFAULT_PREDICTION = 1.0
 BENCHMARK_WARMUP_STEPS = 2
 BENCHMARK_EVALUATION_PROGRESS_FREQUENCY = 1_000
-BENCHMARK_FLOAT_DISPLAY_WIDTH = 10
-REPORT_DATASETS = ("tune", "same", "shifted")
-REC_LINEAR_WIDTH = 0.01
-REC_ZOOM_LINEAR_WIDTH = 1.0
-REC_ZOOM_XMAX = 10.0
 
 type BenchmarkModelSpec = ExperimentModelSpec
 type TuneProgressCallback = Callable[[int, int, float, float, float], None]
@@ -66,171 +63,10 @@ class BenchmarkResult:
 
 
 @dataclass(slots=True)
-class _RecCurve:
-    error_thresholds: np.ndarray
-    cdf: np.ndarray
-
-
-@dataclass(slots=True)
 class _PanelEvaluation:
     mean_loss: float
     stderr: float
     rec_curve: _RecCurve
-
-
-@dataclass(frozen=True, slots=True)
-class _ProgressTableWidths:
-    """Pinned column widths for the live rich benchmark progress table."""
-
-    model: int
-    split: int
-    progress: int
-    loss: int
-    tune_sec_per_trial: int
-    status: int
-
-
-@dataclass(slots=True)
-class _ProgressRowState:
-    """Display state for one model row in the live benchmark progress table."""
-
-    model: str
-    split: str = "pending"
-    progress: str = "--"
-    last_loss: str = "--"
-    best_loss: str = "--"
-    tune_sec_per_trial: str = "--"
-    status: str = "waiting"
-
-
-class _BenchmarkProgress:
-    """Common interface for live and no-op benchmark progress controllers."""
-
-    enabled = False
-
-    def __enter__(self) -> _BenchmarkProgress:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        _ = exc_type, exc, traceback
-
-    def update_row(self, model_name: str, **changes: str) -> None:
-        """Apply display updates to one progress row."""
-        _ = model_name, changes
-
-
-class _NullBenchmarkProgress(_BenchmarkProgress):
-    """Do nothing when the benchmark runs outside an interactive terminal."""
-
-
-class _RichBenchmarkProgress(_BenchmarkProgress):
-    """Render one live progress table for the full benchmark run."""
-
-    enabled = True
-
-    def __init__(self, model_names: list[str], widths: _ProgressTableWidths) -> None:
-        from rich.console import Console
-        from rich.live import Live
-
-        self.model_order = model_names
-        self.widths = widths
-        self.rows = {model_name: _ProgressRowState(model=model_name) for model_name in model_names}
-        self.console = Console()
-        self.live = Live(
-            self._render_table(),
-            console=self.console,
-            refresh_per_second=4,
-            transient=False,
-        )
-
-    def __enter__(self) -> _RichBenchmarkProgress:
-        self.live.__enter__()
-        self.live.update(self._render_table(), refresh=True)
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        self.live.update(self._render_table(), refresh=True)
-        self.live.__exit__(exc_type, exc, traceback)
-
-    def update_row(self, model_name: str, **changes: str) -> None:
-        """Apply display updates to one live table row."""
-        row = self.rows[model_name]
-        for field_name, value in changes.items():
-            setattr(row, field_name, value)
-        self.live.update(self._render_table(), refresh=True)
-
-    def _render_table(self) -> RenderableType:
-        """Render the current table state as a rich table object."""
-        from rich.table import Table
-
-        table = Table(title="Benchmark Progress")
-        table.add_column(
-            "Model",
-            width=self.widths.model,
-            min_width=self.widths.model,
-            no_wrap=True,
-        )
-        table.add_column(
-            "Split",
-            width=self.widths.split,
-            min_width=self.widths.split,
-            no_wrap=True,
-        )
-        table.add_column(
-            "Progress",
-            width=self.widths.progress,
-            min_width=self.widths.progress,
-            no_wrap=True,
-        )
-        table.add_column(
-            "Last Loss",
-            justify="right",
-            width=self.widths.loss,
-            min_width=self.widths.loss,
-            no_wrap=True,
-        )
-        table.add_column(
-            "Best Loss",
-            justify="right",
-            width=self.widths.loss,
-            min_width=self.widths.loss,
-            no_wrap=True,
-        )
-        table.add_column(
-            "Tune Sec/Trial",
-            justify="right",
-            width=self.widths.tune_sec_per_trial,
-            min_width=self.widths.tune_sec_per_trial,
-            no_wrap=True,
-        )
-        table.add_column(
-            "Status",
-            width=self.widths.status,
-            min_width=self.widths.status,
-            no_wrap=True,
-        )
-        for model_name in self.model_order:
-            row = self.rows[model_name]
-            table.add_row(
-                row.model,
-                row.split,
-                row.progress,
-                row.last_loss,
-                row.best_loss,
-                row.tune_sec_per_trial,
-                row.status,
-            )
-        return table
 
 
 def default_output_dir() -> Path:
@@ -241,93 +77,6 @@ def default_output_dir() -> Path:
 def build_benchmark_specs(history_length: int) -> list[BenchmarkModelSpec]:
     """Build the maintained benchmark model suite."""
     return benchmark_model_specs(history_length)
-
-
-def _progress_table_widths(
-    model_names: list[str],
-    n_trials: int,
-    max_rows: int,
-) -> _ProgressTableWidths:
-    """Return pinned widths for all rich benchmark progress columns."""
-    return _ProgressTableWidths(
-        model=max(len("Model"), *(len(model_name) for model_name in model_names)),
-        split=max(len("Split"), len("baseline"), len("shifted"), len("evaluating")),
-        progress=max(
-            len("Progress"),
-            len(_format_tuning_progress(n_trials, n_trials)),
-            len(_format_evaluation_progress(max_rows, max_rows)),
-        ),
-        loss=max(len("Last Loss"), len("Best Loss"), BENCHMARK_FLOAT_DISPLAY_WIDTH),
-        tune_sec_per_trial=max(len("Tune Sec/Trial"), BENCHMARK_FLOAT_DISPLAY_WIDTH),
-        status=max(len("Status"), len("evaluating"), len("evaluated")),
-    )
-
-
-def _format_float_cell(value: float | None, width: int = BENCHMARK_FLOAT_DISPLAY_WIDTH) -> str:
-    """Format one float cell with fixed width and no scientific notation."""
-    if value is None or not np.isfinite(value):
-        return "--".rjust(width)
-    absolute_value = abs(value)
-    overflow_cell = (("<" if value < 0 else ">") + ("9" * (width - 1))).rjust(width)
-    for decimals in range(6, -1, -1):
-        formatted = f"{value:.{decimals}f}"
-        if len(formatted) <= width:
-            return formatted.rjust(width)
-    if len(str(int(absolute_value))) >= width:
-        return overflow_cell
-    return f"{value:.0f}".rjust(width)[:width]
-
-
-def _format_loss(value: float | None) -> str:
-    """Format one optional loss value for the live benchmark table."""
-    return _format_float_cell(value)
-
-
-def _format_tuning_progress(completed_trials: int, total_trials: int) -> str:
-    """Format tuning progress as completed vs total Optuna trials."""
-    return f"{completed_trials} / {total_trials}"
-
-
-def _format_evaluation_progress(completed_rows: int, total_rows: int) -> str:
-    """Format row-based evaluation progress with a whole-percent suffix."""
-    if total_rows <= 0:
-        return "0 / 0 (0%)"
-    clipped_rows = min(completed_rows, total_rows)
-    percent = int(100 * clipped_rows / total_rows)
-    return f"{clipped_rows} / {total_rows} ({percent}%)"
-
-
-def _format_tune_sec_per_trial(elapsed_seconds: float, completed_trials: int) -> str:
-    """Format the model-local wall-clock tuning time per completed trial."""
-    if completed_trials <= 0:
-        return "--".rjust(BENCHMARK_FLOAT_DISPLAY_WIDTH)
-    return f"{elapsed_seconds / completed_trials:>{BENCHMARK_FLOAT_DISPLAY_WIDTH}.2f}"
-
-
-def _should_use_rich_progress(stream: object | None = None) -> bool:
-    """Return whether the benchmark should render the live rich progress table."""
-    output_stream = sys.stdout if stream is None else stream
-    isatty = getattr(output_stream, "isatty", None)
-    return bool(callable(isatty) and isatty())
-
-
-def _build_benchmark_progress(
-    model_names: list[str],
-    n_trials: int,
-    max_rows: int,
-    enabled: bool | None = None,
-) -> _BenchmarkProgress:
-    """Build either the live rich controller or a no-op progress controller."""
-    progress_enabled = _should_use_rich_progress() if enabled is None else enabled
-    if not progress_enabled:
-        return _NullBenchmarkProgress()
-    try:
-        return _RichBenchmarkProgress(
-            model_names,
-            _progress_table_widths(model_names, n_trials=n_trials, max_rows=max_rows),
-        )
-    except ImportError:
-        return _NullBenchmarkProgress()
 
 
 def evaluate_spec(
@@ -345,32 +94,6 @@ def evaluate_spec(
             warmup_steps=BENCHMARK_WARMUP_STEPS,
             return_stderr=True,
         ),
-    )
-
-
-def _weighted_rec_curve(samples: PanelLossSamples) -> _RecCurve:
-    """Return the weighted empirical REC curve for one retained panel sample set."""
-    if len(samples.losses) == 0:
-        empty = np.empty(0, dtype=float)
-        return _RecCurve(error_thresholds=empty, cdf=empty)
-
-    order = np.argsort(samples.losses, kind="stable")
-    sorted_losses = samples.losses[order]
-    sorted_weights = samples.weights[order]
-    cumulative_weights = np.cumsum(sorted_weights)
-    total_weight = float(cumulative_weights[-1])
-    if total_weight <= 0.0:
-        empty = np.empty(0, dtype=float)
-        return _RecCurve(error_thresholds=empty, cdf=empty)
-
-    is_last_occurrence = np.ones(len(sorted_losses), dtype=bool)
-    is_last_occurrence[:-1] = sorted_losses[:-1] != sorted_losses[1:]
-    error_thresholds = sorted_losses[is_last_occurrence]
-    cdf = cumulative_weights[is_last_occurrence] / total_weight
-    start_threshold = 0.0 if error_thresholds[0] > 0.0 else float(error_thresholds[0])
-    return _RecCurve(
-        error_thresholds=np.concatenate(([start_threshold], error_thresholds)),
-        cdf=np.concatenate(([0.0], cdf)),
     )
 
 
@@ -465,149 +188,6 @@ def tune_spec(
     best_stderr = best_trial.user_attrs.get("stderr", np.nan)
     best_value = np.nan if best_trial.value is None else best_trial.value
     return make_json_safe(best_trial.params), float(best_value), float(best_stderr)
-
-
-def _report_run_lines(metadata: dict[str, Any]) -> list[str]:
-    """Return the plain-text benchmark metadata shown in the HTML report."""
-    train_dataset = metadata["train_dataset"]
-    same_dataset = metadata["same_dataset"]
-    shifted_dataset = metadata["shifted_dataset"]
-    return [
-        f"seed={metadata['seed']}",
-        f"history_length={metadata['history_length']}",
-        f"n_trials={metadata['n_trials']}",
-        f"tune_groups={metadata['tune_groups']}",
-        f"test_groups={metadata['test_groups']}",
-        (
-            "train_dataset: "
-            f"mean_spend={train_dataset['mean_spend']} "
-            f"mean_ratio={train_dataset['mean_ratio']} "
-            f"max_time_offset={train_dataset['max_time_offset']} "
-            f"seed={train_dataset['seed']}"
-        ),
-        (
-            "same_dataset: "
-            f"mean_spend={same_dataset['mean_spend']} "
-            f"mean_ratio={same_dataset['mean_ratio']} "
-            f"max_time_offset={same_dataset['max_time_offset']} "
-            f"seed={same_dataset['seed']}"
-        ),
-        (
-            "shifted_dataset: "
-            f"mean_spend={shifted_dataset['mean_spend']} "
-            f"mean_ratio={shifted_dataset['mean_ratio']} "
-            f"max_time_offset={shifted_dataset['max_time_offset']} "
-            f"seed={shifted_dataset['seed']}"
-        ),
-    ]
-
-
-def _render_rec_figure_svg(
-    curves_by_dataset: dict[str, dict[str, _RecCurve]],
-    model_order: list[str],
-) -> str:
-    """Render overview and zoomed REC panels for the three benchmark splits."""
-    import matplotlib.pyplot as plt
-
-    figure, axes = plt.subplots(2, 3, figsize=(15.0, 8.6), sharey=True)
-    figure.suptitle("Benchmark REC Curves")
-    panel_titles = {
-        "tune": "Tune",
-        "same": "Same",
-        "shifted": "Shifted",
-    }
-
-    for column_index, dataset_name in enumerate(REPORT_DATASETS):
-        overview_axis = axes[0, column_index]
-        zoom_axis = axes[1, column_index]
-        for model_name in model_order:
-            curve = curves_by_dataset[dataset_name][model_name]
-            if len(curve.error_thresholds) == 0:
-                continue
-            overview_axis.step(
-                curve.error_thresholds,
-                curve.cdf,
-                where="post",
-                label=model_name,
-            )
-            zoom_axis.step(
-                curve.error_thresholds,
-                curve.cdf,
-                where="post",
-                label=model_name,
-            )
-        overview_axis.set_title(f"{panel_titles[dataset_name]} REC")
-        overview_axis.set_xscale("asinh", linear_width=REC_LINEAR_WIDTH)
-        overview_axis.set_xlabel("Absolute log-ratio error (asinh scale)")
-        overview_axis.set_ylim(0.0, 1.0)
-
-        zoom_axis.set_title(f"{panel_titles[dataset_name]} REC Zoom")
-        zoom_axis.set_xscale("asinh", linear_width=REC_ZOOM_LINEAR_WIDTH)
-        zoom_axis.set_xlim(0.0, REC_ZOOM_XMAX)
-        zoom_axis.set_xlabel("Absolute log-ratio error (zoomed to [0, 10])")
-        zoom_axis.set_ylim(0.0, 1.0)
-
-    axes[0, 0].set_ylabel("Spend-weighted CDF")
-    axes[1, 0].set_ylabel("Spend-weighted CDF")
-    handles, labels = axes[0, 0].get_legend_handles_labels()
-    if handles:
-        figure.legend(handles, labels, loc="lower center", ncol=3)
-    figure.subplots_adjust(bottom=0.18, top=0.90, hspace=0.45, wspace=0.2)
-
-    buffer = StringIO()
-    figure.savefig(buffer, format="svg")
-    plt.close(figure)
-    return strip_svg_preamble(buffer.getvalue())
-
-
-def _render_report_html(summary: pd.DataFrame, metadata: dict[str, Any], svg_markup: str) -> str:
-    """Render the plain HTML benchmark report with one embedded SVG figure."""
-    run_lines = html.escape("\n".join(_report_run_lines(metadata)))
-    summary_html = summary.to_html(
-        index=False,
-        border=1,
-        float_format=lambda value: f"{value:.6f}",
-    )
-    baseline_text = html.escape(
-        "campaign_running_ratio predicts each campaign's cumulative spend/count ratio "
-        "before the current update, with 1.0 as the zero-history fallback."
-    )
-    return "\n".join(
-        [
-            "<!DOCTYPE html>",
-            "<html>",
-            "<head>",
-            '<meta charset="utf-8">',
-            "<title>Benchmark Report</title>",
-            "</head>",
-            "<body>",
-            "<h1>Benchmark Report</h1>",
-            "<h2>Run</h2>",
-            f"<pre>{run_lines}</pre>",
-            "<h2>Summary</h2>",
-            summary_html,
-            "<h2>REC Curves</h2>",
-            f"<p>{baseline_text}</p>",
-            svg_markup,
-            "</body>",
-            "</html>",
-        ]
-    )
-
-
-def write_artifacts(
-    output_dir: Path,
-    summary: pd.DataFrame,
-    best_params: dict[str, dict[str, Any]],
-    metadata: dict[str, Any],
-    report_html: str,
-) -> None:
-    """Write benchmark artifacts to disk."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    write_dataframe_artifacts(output_dir, "summary", summary)
-    write_json_artifact(output_dir / "best_params.json", best_params)
-    write_json_artifact(output_dir / "metadata.json", metadata)
-    (output_dir / "report.html").write_text(report_html, encoding="utf-8")
 
 
 def _run_evaluation_with_progress(
